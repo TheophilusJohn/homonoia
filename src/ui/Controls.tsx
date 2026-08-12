@@ -9,6 +9,8 @@ export interface ControlValues {
   readonly latency: number
   readonly dropPercent: number
   readonly seed: number
+  /** Background client traffic. The demo turns it off so it controls every write. */
+  readonly load: boolean
 }
 
 interface Props {
@@ -21,6 +23,12 @@ interface Props {
   readonly onSubmit: () => void
   readonly onScrub?: (time: number) => void
   readonly onToggleFeed: () => void
+  readonly partitionMode: boolean
+  readonly partitioned: boolean
+  readonly demoRunning: boolean
+  readonly onPartitionMode: () => void
+  readonly onHeal: () => void
+  readonly onDemo: () => void
 }
 
 export function Controls({
@@ -32,6 +40,12 @@ export function Controls({
   onSubmit,
   onScrub,
   onToggleFeed,
+  partitionMode,
+  partitioned,
+  demoRunning,
+  onPartitionMode,
+  onHeal,
+  onDemo,
 }: Props) {
   // Keyed on the committed seed, so React remounts the input (resetting it to
   // the real value) whenever the run changes. No mirrored state to sync.
@@ -53,6 +67,37 @@ export function Controls({
 
       <button onClick={onSubmit} disabled={feedKind === 'mock'} title="Submit a command to the leader">
         Command
+      </button>
+
+      <button
+        className={partitionMode ? 'armed' : partitioned ? 'hot' : ''}
+        disabled={feedKind === 'mock'}
+        onClick={onPartitionMode}
+        title="Click nodes, or drag across the field, to split the cluster"
+      >
+        {partitionMode ? 'Cutting…' : 'Partition'}
+      </button>
+
+      <button onClick={onHeal} disabled={feedKind === 'mock' || !partitioned}>
+        Heal
+      </button>
+
+      <button
+        className={demoRunning ? 'armed' : ''}
+        disabled={feedKind === 'mock'}
+        onClick={onDemo}
+        title="Split 3/2 with the leader stranded, write to both sides, then heal"
+      >
+        {demoRunning ? 'Demo…' : 'Demo'}
+      </button>
+
+      <button
+        className={values.load ? '' : 'hot'}
+        disabled={feedKind === 'mock'}
+        onClick={() => onChange({ load: !values.load })}
+        title="Background client traffic"
+      >
+        Load {values.load ? 'on' : 'off'}
       </button>
 
       <div className="sl">

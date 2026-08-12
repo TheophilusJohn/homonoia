@@ -332,3 +332,127 @@ describe('figure 8', () => {
     expect(nodeState(sim, rival).log[strandedIndex - 1].command.value).toBe('RIVAL')
   })
 })
+
+/**
+ * The demonstration, asserted rather than admired.
+ *
+ * A majority makes progress, a minority cannot, and healing discards the
+ * minority's unreplicated work instead of letting it corrupt what was agreed.
+ *
+ * The leader is deliberately stranded on the minority side. That is what makes
+ * the demonstration honest: the old leader has not heard a higher term, so it
+ * still believes it leads and keeps accepting writes. Those entries can never
+ * commit, and on heal they are truncated. Put the leader on the majority side
+ * and the minority has no leader to write to at all — nothing stalls, and the
+ * interesting failure never happens.
+ */
+describe('demo — majority commits, minority stalls, heal converges', () => {
+  function runDemo() {
+    const sim = createSim({
+      seed: 31415,
+      nodes: NODES,
+      latency: { min: 1, max: 3 },
+      electionTimeout: { min: 50, max: 100 },
+    })
+    runChecked(sim, 300)
+
+    const stranded = leaders(sim)[0].id
+    const others = NODES.filter((id) => id !== stranded)
+    const minority = [stranded, others[0]]
+    const majority = others.slice(1)
+
+    partitionCluster(sim, [majority, minority])
+    runChecked(sim, 250)
+
+    // The majority side elects its own leader in a higher term.
+    const newLeader = leaders(sim).find((leader) => majority.includes(leader.id))
+    expect(newLeader).toBeDefined()
+    expect(newLeader!.currentTerm).toBeGreaterThan(nodeState(sim, stranded).currentTerm)
+
+    submitTo(sim, newLeader!.id, { key: 'alpha', value: '1' })
+    runChecked(sim, 60)
+    submitTo(sim, newLeader!.id, { key: 'beta', value: '2' })
+    runChecked(sim, 120)
+
+    const committedOnMajority = nodeState(sim, newLeader!.id).commitIndex
+
+    // The stranded leader still thinks it leads, and still takes writes.
+    const strandedBefore = nodeState(sim, stranded)
+    expect(strandedBefore.role).toBe('leader')
+    submitTo(sim, stranded, { key: 'ghost', value: 'x' })
+    submitTo(sim, stranded, { key: 'ghost', value: 'y' })
+    runChecked(sim, 200)
+
+    return { sim, stranded, minority, majority, newLeader: newLeader!.id, committedOnMajority }
+  }
+
+  it('lets the majority commit', () => {
+    const { sim, majority, committedOnMajority } = runDemo()
+
+    expect(committedOnMajority).toBeGreaterThanOrEqual(2)
+    for (const id of majority) {
+      expect(nodeState(sim, id).kv).toMatchObject({ alpha: '1', beta: '2' })
+    }
+  })
+
+  it('leaves the stranded side stalled — appended but never committed', () => {
+    const { sim, stranded } = runDemo()
+    const node = nodeState(sim, stranded)
+
+    // The entries are in its log...
+    expect(node.log.length).toBeGreaterThan(node.commitIndex)
+    // ...and not one of them is committed, because no majority ever saw them.
+    expect(node.kv.ghost).toBeUndefined()
+  })
+
+  it('never lets the stranded side reach a quorum', () => {
+    const { sim, minority } = runDemo()
+
+    for (const id of minority) {
+      const node = nodeState(sim, id)
+      expect(node.kv.ghost).toBeUndefined()
+      expect(node.kv.alpha).toBeUndefined()
+    }
+  })
+
+  it('converges the minority onto the majority log after healing', () => {
+    const { sim, stranded, newLeader } = runDemo()
+
+    healCluster(sim)
+    runChecked(sim, 600)
+
+    const winner = nodeState(sim, newLeader)
+    const recovered = nodeState(sim, stranded)
+
+    // The stranded leader stepped down and took the majority's log.
+    expect(recovered.role).toBe('follower')
+    expect(recovered.log).toEqual(winner.log)
+    expect(recovered.kv).toEqual(winner.kv)
+    // Its unreplicated writes are gone, not merged.
+    expect(recovered.kv.ghost).toBeUndefined()
+  })
+
+  it('ends with one log on all five nodes', () => {
+    const { sim } = runDemo()
+
+    healCluster(sim)
+    runChecked(sim, 600)
+
+    const [first, ...rest] = allNodes(sim)
+    for (const node of rest) {
+      expect(node.log).toEqual(first.log)
+      expect(node.kv).toEqual(first.kv)
+    }
+    expect(leaders(sim)).toHaveLength(1)
+  })
+
+  // runChecked has been asserting all five safety properties after every tick
+  // of every step above. This states it as its own claim.
+  it('holds all five safety properties throughout', () => {
+    expect(() => {
+      const { sim } = runDemo()
+      healCluster(sim)
+      runChecked(sim, 600)
+    }).not.toThrow()
+  })
+})

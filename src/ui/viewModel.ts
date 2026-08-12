@@ -17,7 +17,13 @@ import type { NodeId, Role } from '../raft/types'
  * ui -> sim -> raft, and this module is the seam.
  */
 
-export type CellState = 'uncommitted' | 'committed' | 'divergent'
+export type CellState =
+  | 'uncommitted'
+  | 'committed'
+  /** Conflicts with the leader's log at this index — about to be truncated. */
+  | 'divergent'
+  /** Already truncated. Kept in the view briefly so the removal can be seen. */
+  | 'truncated'
 
 export interface LogCellView {
   readonly index: number
@@ -33,6 +39,8 @@ export interface LogCellView {
    * describes.
    */
   readonly committedAt?: number
+  /** Tick this entry was truncated away, for the shatter. */
+  readonly truncatedAt?: number
 }
 
 export interface NodeView {
@@ -74,14 +82,22 @@ export interface PulseView {
   readonly at: number
 }
 
-/** A message that died in transit, with the point along its arc where it died. */
+/**
+ * A message that died in transit.
+ *
+ * The *cause* is carried rather than a baked-in position, because where a
+ * message dies is geometry and geometry belongs to the renderer: a partition
+ * drop has to disintegrate where its arc crosses the rift, and only the render
+ * layer knows where the rift is.
+ */
+export type DropCause = 'random' | 'partition' | 'node-down'
+
 export interface DropView {
   readonly key: string
   readonly from: NodeId
   readonly to: NodeId
   readonly at: number
-  /** 0..1 along the arc. Random drops die early; partition drops die on arrival. */
-  readonly progress: number
+  readonly cause: DropCause
 }
 
 export type EventTone = 'normal' | 'leader' | 'good' | 'warn'
@@ -101,6 +117,8 @@ export interface ViewState {
   readonly commitIndex: number
   readonly phase: string
   readonly nodes: readonly NodeView[]
+  /** Groups that can reach each other, or null when the network is whole. */
+  readonly partition: readonly (readonly NodeId[])[] | null
   readonly messages: readonly MessageView[]
   readonly pulses: readonly PulseView[]
   readonly drops: readonly DropView[]

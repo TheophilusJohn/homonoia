@@ -1,7 +1,7 @@
 import type { NodeId } from '../../raft/types'
 import type { MessageKind, NodeView, ViewState } from '../viewModel'
-import { arcControl, arcPoint, jitter, NODE_RADIUS, ringLayout } from './geometry'
-import type { Point } from './geometry'
+import { arcControl, arcCrossing, arcPoint, jitter, NODE_RADIUS, riftBetween, ringLayout } from './geometry'
+import type { Point, Rift } from './geometry'
 
 /**
  * The node field.
@@ -53,17 +53,75 @@ export function render(
   const centre: Point = { x: width / 2, y: height / 2 }
   const at = (id: NodeId): Point => layout.get(id) ?? centre
 
+  const rift = state.partition ? riftBetween(state.partition, layout) : null
+
   ctx.clearRect(0, 0, width, height)
 
-  drawIdleLinks(ctx, ids, at, centre)
+  drawIdleLinks(ctx, ids, at, centre, state)
+  if (rift) drawRift(ctx, rift, state, width, height, reducedMotion)
 
   ctx.globalCompositeOperation = 'lighter'
   drawPulses(ctx, state, at, reducedMotion)
   drawMessages(ctx, state, at, centre, reducedMotion)
-  drawDrops(ctx, state, at, centre, reducedMotion)
+  drawDrops(ctx, state, at, centre, rift, reducedMotion)
   ctx.globalCompositeOperation = 'source-over'
 
   drawNodes(ctx, state, at, reducedMotion)
+}
+
+/** Which group a node is in, or -1 when the network is whole. */
+function groupOf(state: ViewState, id: NodeId): number {
+  if (!state.partition) return -1
+  return state.partition.findIndex((group) => group.includes(id))
+}
+
+function severed(state: ViewState, a: NodeId, b: NodeId): boolean {
+  if (!state.partition) return false
+  return groupOf(state, a) !== groupOf(state, b)
+}
+
+/**
+ * The rift: an animated dashed line along the perpendicular bisector between
+ * the two group centroids, with a soft oxide wash either side.
+ *
+ * A partition opening is one of the four cinematic moments, so this is allowed
+ * to be the loudest thing on screen while it is happening.
+ */
+function drawRift(
+  ctx: CanvasRenderingContext2D,
+  rift: Rift,
+  state: ViewState,
+  width: number,
+  height: number,
+  reducedMotion: boolean,
+): void {
+  const reach = Math.hypot(width, height)
+
+  ctx.save()
+  ctx.translate(rift.at.x, rift.at.y)
+  ctx.rotate(rift.angle)
+
+  const wash = ctx.createLinearGradient(-26, 0, 26, 0)
+  wash.addColorStop(0, 'rgba(194,84,56,0)')
+  wash.addColorStop(0.5, 'rgba(194,84,56,.10)')
+  wash.addColorStop(1, 'rgba(194,84,56,0)')
+  ctx.fillStyle = wash
+  ctx.fillRect(-26, -reach, 52, reach * 2)
+
+  ctx.strokeStyle = 'rgba(194,84,56,.5)'
+  ctx.lineWidth = 1
+  ctx.setLineDash([9, 7])
+  ctx.lineDashOffset = reducedMotion ? 0 : -state.time * 2.2
+
+  ctx.beginPath()
+  for (let y = -reach; y < reach; y += 9) {
+    // A slight waver, so the tear reads as a fault rather than a ruled line.
+    const waver = reducedMotion ? 0 : Math.sin(y * 0.05 + state.time * 0.08) * 4
+    ctx.lineTo(waver, y)
+  }
+  ctx.stroke()
+  ctx.setLineDash([])
+  ctx.restore()
 }
 
 /** The resting topology: every pair, barely there. */
@@ -72,15 +130,20 @@ function drawIdleLinks(
   ids: readonly NodeId[],
   at: (id: NodeId) => Point,
   centre: Point,
+  state: ViewState,
 ): void {
   ctx.lineWidth = 0.5
-  ctx.strokeStyle = 'rgba(90,100,125,.11)'
 
   for (let i = 0; i < ids.length; i++) {
     for (let j = i + 1; j < ids.length; j++) {
       const from = at(ids[i])
       const to = at(ids[j])
       const control = arcControl(from, to, centre)
+      // A severed link stays visible but goes oxide: the topology is still
+      // there, it just cannot carry anything.
+      ctx.strokeStyle = severed(state, ids[i], ids[j])
+        ? 'rgba(194,84,56,.10)'
+        : 'rgba(90,100,125,.11)'
       ctx.beginPath()
       ctx.moveTo(from.x, from.y)
       ctx.quadraticCurveTo(control.x, control.y, to.x, to.y)
@@ -131,6 +194,7 @@ function drawDrops(
   state: ViewState,
   at: (id: NodeId) => Point,
   centre: Point,
+  rift: Rift | null,
   reducedMotion: boolean,
 ): void {
   for (const drop of state.drops) {
@@ -141,7 +205,20 @@ function drawDrops(
     if (age > life) continue
 
     const fade = 1 - age / life
-    const origin = arcPoint(at(drop.from), at(drop.to), centre, drop.progress)
+    const from = at(drop.from)
+    const to = at(drop.to)
+
+    // Where it died. A message stopped by a partition dies *on the rift* — the
+    // boundary is what killed it, so that is where it comes apart. Anything
+    // else dies in the wire, or on arrival at a node that is not listening.
+    const where =
+      drop.cause === 'partition' && rift
+        ? (arcCrossing(from, to, centre, rift) ?? 0.5)
+        : drop.cause === 'node-down'
+          ? 1
+          : 0.42
+
+    const origin = arcPoint(from, to, centre, where)
 
     for (let k = 0; k < 6; k++) {
       const seed = drop.key.length * 31 + k

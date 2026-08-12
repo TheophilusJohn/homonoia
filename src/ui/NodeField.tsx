@@ -12,13 +12,21 @@ import type { ViewState } from './viewModel'
  * React never re-renders on a per-frame basis.
  */
 
+interface Point {
+  readonly x: number
+  readonly y: number
+}
+
 interface Props {
   readonly state: ViewState
   readonly reducedMotion: boolean
   readonly onNodeClick: (id: NodeId) => void
+  /** When set, a drag across the field cuts the cluster along the line drawn. */
+  readonly onDrag?: (from: Point, to: Point, width: number, height: number) => void
 }
 
-export function NodeField({ state, reducedMotion, onNodeClick }: Props) {
+export function NodeField({ state, reducedMotion, onNodeClick, onDrag }: Props) {
+  const dragFrom = useRef<Point | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const stateRef = useRef(state)
   const motionRef = useRef(reducedMotion)
@@ -67,19 +75,39 @@ export function NodeField({ state, reducedMotion, onNodeClick }: Props) {
     }
   }, [])
 
+  const local = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    return { point: { x: event.clientX - rect.left, y: event.clientY - rect.top }, rect }
+  }
+
+  const handleMouseDown = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!onDrag) return
+    dragFrom.current = local(event).point
+  }
+
+  const handleMouseUp = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    const start = dragFrom.current
+    dragFrom.current = null
+    if (!onDrag || !start) return
+
+    const { point, rect } = local(event)
+    // A short drag is a click; anything longer is a cut.
+    if (Math.hypot(point.x - start.x, point.y - start.y) < 24) return
+    onDrag(start, point, rect.width, rect.height)
+  }
+
   const handleClick = (event: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const rect = canvas.getBoundingClientRect()
-    const id = nodeAtPoint(
-      stateRef.current,
-      event.clientX - rect.left,
-      event.clientY - rect.top,
-      rect.width,
-      rect.height,
-    )
+    const { point, rect } = local(event)
+    const id = nodeAtPoint(stateRef.current, point.x, point.y, rect.width, rect.height)
     if (id) onNodeClick(id)
   }
 
-  return <canvas ref={canvasRef} onClick={handleClick} />
+  return (
+    <canvas
+      ref={canvasRef}
+      onClick={handleClick}
+      onMouseDown={handleMouseDown}
+      onMouseUp={handleMouseUp}
+    />
+  )
 }

@@ -49,14 +49,15 @@ export function Ledger({ nodes, time }: Props) {
             {node.log.map((cell) => {
               const age = cell.committedAt === undefined ? Infinity : time - cell.committedAt
               const fresh = age >= 0 && age < FRESH_TICKS
+              const gone = cell.state === 'truncated'
 
               return (
                 <div
-                  key={cell.index}
-                  className={`cell${fresh ? ' crystallize' : ''}`}
+                  key={`${cell.index}-${cell.state}`}
+                  className={`cell${fresh ? ' crystallize' : ''}${gone ? ' shatter' : ''}`}
                   data-state={cell.state}
                   style={fresh ? { animationDelay: `${row * STAGGER_MS}ms` } : undefined}
-                  title={`index ${cell.index} · term ${cell.term}`}
+                  title={gone ? 'truncated' : `index ${cell.index} · term ${cell.term}`}
                 >
                   {cell.label}
                 </div>

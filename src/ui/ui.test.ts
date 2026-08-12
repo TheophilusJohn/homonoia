@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { arcPoint, NODE_RADIUS, ringLayout } from './field/geometry'
+import { arcCrossing, arcPoint, NODE_RADIUS, riftBetween, ringLayout, sideOf } from './field/geometry'
+import { castFor } from './demo'
 import { nodeAtPoint } from './field/render'
 import { createMockFeed, MOCK_CYCLE_TICKS } from './mockFeed'
 import { createSimFeed } from './simFeed'
@@ -201,5 +202,80 @@ describe('sim feed', () => {
     for (let t = 1; t <= 300; t++) seen += feed.seek(t).drops.length
 
     expect(seen).toBeGreaterThan(0)
+  })
+})
+
+describe('the rift', () => {
+  const layout = ringLayout(IDS, 900, 700)
+
+  it('is null unless the cluster is split in two', () => {
+    expect(riftBetween([IDS], layout)).toBeNull()
+    expect(riftBetween([['n1'], ['n2'], ['n3']], layout)).toBeNull()
+    expect(riftBetween([[], IDS], layout)).toBeNull()
+  })
+
+  it('passes through the midpoint of the two centroids', () => {
+    const rift = riftBetween([['n1', 'n2'], ['n3', 'n4', 'n5']], layout)!
+
+    expect(sideOf(rift, rift.at)).toBeCloseTo(0, 6)
+  })
+
+  // The line must run *across* the split, not along it. Drawing it along the
+  // normal instead is a quarter-turn error that still looks plausible until you
+  // check which side each node lands on.
+  it('separates the two groups when the split is contiguous on the ring', () => {
+    const a = ['n1', 'n2']
+    const b = ['n3', 'n4', 'n5']
+    const rift = riftBetween([a, b], layout)!
+
+    const signs = (group: string[]) => group.map((id) => Math.sign(sideOf(rift, layout.get(id)!)))
+    expect(new Set(signs(a))).toEqual(new Set([-1]))
+    expect(new Set(signs(b))).toEqual(new Set([1]))
+  })
+
+  it('is computed from the groups, so a different split moves it', () => {
+    const one = riftBetween([['n1', 'n2'], ['n3', 'n4', 'n5']], layout)!
+    const two = riftBetween([['n3', 'n4'], ['n1', 'n2', 'n5']], layout)!
+
+    expect(one.angle).not.toBeCloseTo(two.angle, 3)
+  })
+
+  it('finds where an arc crosses it, between the two endpoints', () => {
+    const rift = riftBetween([['n1', 'n2'], ['n3', 'n4', 'n5']], layout)!
+    const centre = { x: 450, y: 350 }
+    const from = layout.get('n1')!
+    const to = layout.get('n4')!
+
+    const t = arcCrossing(from, to, centre, rift)
+    expect(t).not.toBeNull()
+    expect(t!).toBeGreaterThan(0)
+    expect(t!).toBeLessThan(1)
+
+    // And the crossing point really is on the line.
+    expect(sideOf(rift, arcPoint(from, to, centre, t!))).toBeCloseTo(0, 6)
+  })
+
+  it('finds no crossing for an arc that stays on one side', () => {
+    const rift = riftBetween([['n1', 'n2'], ['n3', 'n4', 'n5']], layout)!
+    const centre = { x: 450, y: 350 }
+
+    expect(arcCrossing(layout.get('n3')!, layout.get('n4')!, centre, rift)).toBeNull()
+  })
+})
+
+describe('demo cast', () => {
+  it('strands the leader with a ring neighbour, never a quorum', () => {
+    for (const leader of IDS) {
+      const cast = castFor(leader, IDS)
+
+      expect(cast.minority).toHaveLength(2)
+      expect(cast.majority).toHaveLength(3)
+      expect(cast.minority).toContain(leader)
+      expect(cast.minority.length * 2).toBeLessThan(IDS.length)
+
+      // Adjacent on the ring, so the rift can actually separate the sides.
+      const gap = Math.abs(IDS.indexOf(cast.minority[0]) - IDS.indexOf(cast.minority[1]))
+      expect(gap === 1 || gap === IDS.length - 1).toBe(true)
+    }
   })
 })

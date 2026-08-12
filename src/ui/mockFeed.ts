@@ -197,7 +197,7 @@ function dropsAt(t: number, beat: Beat): DropView[] {
       from: IDS[beat.leader],
       to: IDS[beat.down],
       at: origin + 3,
-      progress: 0.35 + hashed(origin) * 0.3,
+      cause: 'node-down',
     })
   }
   return pruneEffects(drops, t)
@@ -241,6 +241,7 @@ export function createMockFeed(): Feed {
         commitIndex: beat.committed,
         phase: beat.phase,
         nodes,
+        partition: null,
         messages: messagesAt(t, beat),
         pulses: pulsesAt(t, beat),
         drops: dropsAt(t, beat),

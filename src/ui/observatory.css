@@ -257,6 +257,10 @@ body {
   background: var(--ink);
   color: #0b0e15;
 }
+.cell[data-state='truncated'] {
+  border-color: rgba(194, 84, 56, 0.5);
+  background: rgba(194, 84, 56, 0.08);
+}
 .cell[data-state='divergent'] {
   border-color: rgba(194, 84, 56, 0.5);
   color: var(--oxide);
@@ -351,6 +355,34 @@ body {
   color: var(--ink);
 }
 
+/* partition banner — a cinematic moment, so it is allowed to announce itself */
+.banner {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-8px);
+  font-size: 10.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 6px 16px;
+  border: 1px solid var(--oxide);
+  color: var(--oxide);
+  background: rgba(194, 84, 56, 0.09);
+  border-radius: 2px;
+  opacity: 0;
+  transition:
+    opacity 0.45s var(--ease),
+    transform 0.45s var(--ease);
+  pointer-events: none;
+}
+.banner.on {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.field[data-mode='partition'] canvas {
+  cursor: crosshair;
+}
+
 /* ── controls ───────────────────────────── */
 
 .foot {
@@ -380,6 +412,14 @@ button:hover:not(:disabled) {
 }
 button:active:not(:disabled) {
   transform: scale(0.97);
+}
+button.hot {
+  border-color: var(--oxide);
+  color: var(--oxide);
+}
+button.armed {
+  border-color: var(--leader);
+  color: var(--leader);
 }
 button:disabled {
   opacity: 0.4;

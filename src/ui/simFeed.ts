@@ -2,11 +2,14 @@ import type { NodeId, Rpc } from '../raft/types'
 import {
   allNodes,
   createSim,
+  healCluster,
   inFlight,
   kill,
   leaders,
+  partitionCluster,
   revive,
   submit,
+  submitTo,
   tick as advance,
 } from '../sim/sim'
 import type { Sim } from '../sim/sim'
@@ -52,6 +55,9 @@ export interface SimFeedOptions {
   readonly commandEvery?: number
 }
 
+/** How long a truncated entry lingers in the view so the shatter can be seen. */
+const GHOST_TICKS = 14
+
 const DEFAULT_NODES: NodeId[] = ['n1', 'n2', 'n3', 'n4', 'n5']
 
 export interface SimFeed extends Feed {
@@ -61,6 +67,21 @@ export interface SimFeed extends Feed {
   options(): SimFeedOptions
   toggleNode(id: NodeId): void
   submitCommand(): void
+  /** Submit to a named node — a partitioned cluster can hold two leaders. */
+  submitTo(id: NodeId, key: string, value: string): void
+  partition(groups: readonly (readonly NodeId[])[]): void
+  heal(): void
+  currentPartition(): readonly (readonly NodeId[])[] | null
+  leaderId(): NodeId | null
+  /** Change background client traffic without restarting the run. */
+  setLoad(commandEvery: number): void
+}
+
+interface Ghost {
+  readonly nodeId: NodeId
+  readonly index: number
+  readonly term: number
+  readonly at: number
 }
 
 function kindOf(rpc: Rpc): MessageKind {
@@ -105,6 +126,10 @@ export function createSimFeed(initial: SimFeedOptions): SimFeed {
   let counter = 0
   /** `${nodeId}:${index}` -> the tick that cell first became committed. */
   let committedAt = new Map<string, number>()
+  /** Entries that have been truncated away, kept briefly so the removal is visible. */
+  let ghosts: Ghost[] = []
+  let previousLogs = new Map<NodeId, number>()
+  let groups: readonly (readonly NodeId[])[] | null = null
 
   function build(o: SimFeedOptions): Sim {
     const latency = o.latency ?? 4
@@ -128,6 +153,9 @@ export function createSimFeed(initial: SimFeedOptions): SimFeed {
     lastLeader = null
     counter = 0
     committedAt = new Map()
+    ghosts = []
+    previousLogs = new Map()
+    if (groups) partitionCluster(sim, groups.map((g) => [...g]))
   }
 
   /** Drain trace events written since the last call into stream lines and effects. */
@@ -148,16 +176,14 @@ export function createSimFeed(initial: SimFeedOptions): SimFeed {
       }
 
       if (event.kind === 'drop') {
-        // A random drop dies at send time, so it is shown dying partway along
-        // the arc rather than never appearing. A partition or node-down drop
-        // travelled the whole way and died on arrival.
-        const travelled = event.sentAt === undefined
+        // The cause travels with the drop; the renderer decides where on the
+        // arc it comes apart, because only it knows where the rift is.
         drops.push({
           key: `dp-${counter++}`,
           from: event.message.from,
           to: event.message.to,
           at: event.tick,
-          progress: travelled ? 0.42 : 1,
+          cause: event.reason,
         })
       }
 
@@ -200,6 +226,25 @@ export function createSimFeed(initial: SimFeedOptions): SimFeed {
       lastCommit = commit
     }
 
+    // A shrinking log means entries were truncated. Hold on to them for a
+    // moment so the ledger can show them being taken away rather than simply
+    // blinking out.
+    for (const node of allNodes(sim)) {
+      const before = previousLogs.get(node.id)
+      if (before !== undefined && node.log.length < before) {
+        for (let index = node.log.length + 1; index <= before; index++) {
+          ghosts.push({ nodeId: node.id, index, term: 0, at: sim.now })
+        }
+        events.push({
+          key: `ev-${counter++}`,
+          tick: sim.now,
+          text: `${node.id} log conflict · truncating to index ${node.log.length}`,
+          tone: 'warn',
+        })
+      }
+      previousLogs.set(node.id, node.log.length)
+    }
+
     for (const node of allNodes(sim)) {
       for (let index = 1; index <= node.commitIndex; index++) {
         const key = `${node.id}:${index}`
@@ -217,16 +262,35 @@ export function createSimFeed(initial: SimFeedOptions): SimFeed {
     const [leader] = leaders(sim)
     const states = allNodes(sim)
     const maxCommit = Math.max(...states.map((node) => node.commitIndex))
+    // The leader's log is the yardstick for divergence. This is an observer's
+    // comparison, not something any node computes.
+    const reference = leader?.log ?? []
 
     const nodes: NodeView[] = states.map((node) => {
       const alive = sim.alive.has(node.id)
-      const log: LogCellView[] = node.log.map((entry, i) => ({
-        index: i + 1,
-        term: entry.term,
-        state: i + 1 <= node.commitIndex ? 'committed' : 'uncommitted',
-        label: String(entry.term),
-        committedAt: committedAt.get(`${node.id}:${i + 1}`),
-      }))
+      const log: LogCellView[] = node.log.map((entry, i) => {
+        const committed = i + 1 <= node.commitIndex
+        const mismatch =
+          !committed && reference[i] !== undefined && reference[i].term !== entry.term
+        return {
+          index: i + 1,
+          term: entry.term,
+          state: committed ? 'committed' : mismatch ? 'divergent' : 'uncommitted',
+          label: String(entry.term),
+          committedAt: committedAt.get(`${node.id}:${i + 1}`),
+        }
+      })
+
+      for (const ghost of ghosts) {
+        if (ghost.nodeId !== node.id) continue
+        log.push({
+          index: ghost.index,
+          term: ghost.term,
+          state: 'truncated',
+          label: '',
+          truncatedAt: ghost.at,
+        })
+      }
       return {
         id: node.id,
         role: alive ? node.role : 'follower',
@@ -259,6 +323,7 @@ export function createSimFeed(initial: SimFeedOptions): SimFeed {
       commitIndex: maxCommit,
       phase,
       nodes,
+      partition: groups,
       messages,
       pulses: pruneEffects(pulses, sim.now),
       drops: pruneEffects(drops, sim.now),
@@ -277,6 +342,7 @@ export function createSimFeed(initial: SimFeedOptions): SimFeed {
       if (target < sim.now) reset()
 
       while (sim.now < target) {
+        ghosts = ghosts.filter((ghost) => sim.now - ghost.at <= GHOST_TICKS)
         const every = options.commandEvery ?? 0
         if (every > 0 && sim.now > 0 && sim.now % every === 0) {
           counter += 1
@@ -312,6 +378,33 @@ export function createSimFeed(initial: SimFeedOptions): SimFeed {
       counter += 1
       submit(sim, { key: `k${counter % 8}`, value: `v${counter}` })
       harvest()
+    },
+
+    submitTo(id: NodeId, key: string, value: string): void {
+      submitTo(sim, id, { key, value })
+      harvest()
+    },
+
+    partition(next: readonly (readonly NodeId[])[]): void {
+      groups = next.map((group) => [...group])
+      partitionCluster(
+        sim,
+        groups.map((group) => [...group]),
+      )
+      harvest()
+    },
+
+    heal(): void {
+      groups = null
+      healCluster(sim)
+      harvest()
+    },
+
+    currentPartition: () => groups,
+    leaderId: () => leaders(sim)[0]?.id ?? null,
+
+    setLoad(commandEvery: number): void {
+      options = { ...options, commandEvery }
     },
   }
 }
