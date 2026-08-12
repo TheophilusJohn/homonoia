@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { Message, NodeId } from '../raft/types'
 import { canReach, collectDue, createBus, heal, partition, send } from './bus'
+import { createTracer } from './trace'
 import { makePrng } from './prng'
 import {
   allNodes,
@@ -19,6 +20,7 @@ import {
 import type { SimOptions } from './sim'
 
 const NODES: NodeId[] = ['n1', 'n2', 'n3', 'n4', 'n5']
+const NO_TRACE = createTracer(false)
 
 function options(overrides: Partial<SimOptions> = {}): SimOptions {
   return {
@@ -61,11 +63,11 @@ describe('bus', () => {
       dropProbability: 0,
       duplicateProbability: 0,
     })
-    send(bus, makePrng(1), 10, [ping('n1', 'n2')])
+    send(bus, makePrng(1), 10, [ping('n1', 'n2')], NO_TRACE)
 
-    expect(collectDue(bus, 11)).toHaveLength(0)
-    expect(collectDue(bus, 12)).toHaveLength(0)
-    expect(collectDue(bus, 13)).toHaveLength(1)
+    expect(collectDue(bus, 11, NO_TRACE)).toHaveLength(0)
+    expect(collectDue(bus, 12, NO_TRACE)).toHaveLength(0)
+    expect(collectDue(bus, 13, NO_TRACE)).toHaveLength(1)
   })
 
   // Reordering is not a separate shuffle — it falls out of sampling latency per
@@ -80,10 +82,10 @@ describe('bus', () => {
     const prng = makePrng(7)
 
     const sent = NODES.map((to) => ping('n1', to))
-    send(bus, prng, 0, sent)
+    send(bus, prng, 0, sent, NO_TRACE)
 
     const arrived: Message[] = []
-    for (let now = 1; now <= 30; now++) arrived.push(...collectDue(bus, now))
+    for (let now = 1; now <= 30; now++) arrived.push(...collectDue(bus, now, NO_TRACE))
 
     expect(arrived).toHaveLength(sent.length)
     // Same set, different order.
@@ -97,10 +99,10 @@ describe('bus', () => {
       dropProbability: 1,
       duplicateProbability: 0,
     })
-    send(bus, makePrng(3), 0, [ping('n1', 'n2'), ping('n1', 'n3')])
+    send(bus, makePrng(3), 0, [ping('n1', 'n2'), ping('n1', 'n3')], NO_TRACE)
 
     expect(bus.stats.dropped).toBe(2)
-    expect(collectDue(bus, 99)).toHaveLength(0)
+    expect(collectDue(bus, 99, NO_TRACE)).toHaveLength(0)
   })
 
   it('duplicates messages, each copy with its own latency', () => {
@@ -109,7 +111,7 @@ describe('bus', () => {
       dropProbability: 0,
       duplicateProbability: 1,
     })
-    send(bus, makePrng(11), 0, [ping('n1', 'n2')])
+    send(bus, makePrng(11), 0, [ping('n1', 'n2')], NO_TRACE)
 
     expect(bus.stats.duplicated).toBe(1)
     expect(bus.inFlight).toHaveLength(2)
@@ -132,8 +134,8 @@ describe('bus', () => {
     expect(canReach(bus, 'n4', 'n5')).toBe(true)
     expect(canReach(bus, 'n1', 'n4')).toBe(false)
 
-    send(bus, makePrng(1), 0, [ping('n1', 'n2'), ping('n1', 'n4')])
-    const arrived = collectDue(bus, 1)
+    send(bus, makePrng(1), 0, [ping('n1', 'n2'), ping('n1', 'n4')], NO_TRACE)
+    const arrived = collectDue(bus, 1, NO_TRACE)
 
     expect(arrived).toHaveLength(1)
     expect(arrived[0].to).toBe('n2')
@@ -161,11 +163,11 @@ describe('bus', () => {
       duplicateProbability: 0,
     })
     partition(bus, [['n1'], ['n2']])
-    send(bus, makePrng(1), 0, [ping('n1', 'n2')])
+    send(bus, makePrng(1), 0, [ping('n1', 'n2')], NO_TRACE)
 
     heal(bus)
 
-    expect(collectDue(bus, 5)).toHaveLength(1)
+    expect(collectDue(bus, 5, NO_TRACE)).toHaveLength(1)
   })
 })
 

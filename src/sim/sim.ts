@@ -4,6 +4,8 @@ import { collectDue, createBus, heal, partition, send } from './bus'
 import type { Bus, Latency } from './bus'
 import { makePrng } from './prng'
 import type { Prng } from './prng'
+import { createTracer, record } from './trace'
+import type { Tracer } from './trace'
 
 /**
  * The driver: a virtual clock, a set of nodes, and the simulated network
@@ -25,6 +27,8 @@ export interface SimOptions {
   readonly electionTimeout: Latency
   readonly dropProbability?: number
   readonly duplicateProbability?: number
+  /** Record a full event trace. On by default; the fuzz harness needs it. */
+  readonly trace?: boolean
 }
 
 export interface Sim {
@@ -36,6 +40,7 @@ export interface Sim {
   readonly prng: Prng
   readonly electionTimeout: Latency
   readonly seed: number
+  readonly tracer: Tracer
 }
 
 export function createSim(options: SimOptions): Sim {
@@ -77,6 +82,7 @@ export function createSim(options: SimOptions): Sim {
     prng,
     electionTimeout: options.electionTimeout,
     seed: options.seed,
+    tracer: createTracer(options.trace ?? true),
   }
 }
 
@@ -95,10 +101,14 @@ function drawElectionTimeout(prng: Prng, range: Latency): number {
 export function tick(sim: Sim, count = 1): void {
   for (let i = 0; i < count; i++) {
     sim.now += 1
+    record(sim.tracer, { tick: sim.now, kind: 'tick' })
 
-    for (const message of collectDue(sim.bus, sim.now)) {
+    for (const message of collectDue(sim.bus, sim.now, sim.tracer)) {
       // A killed node receives nothing. The message is simply gone.
-      if (!sim.alive.has(message.to)) continue
+      if (!sim.alive.has(message.to)) {
+        record(sim.tracer, { tick: sim.now, kind: 'drop', message, reason: 'node-down' })
+        continue
+      }
       apply(sim, message.to, { type: 'deliver', message })
     }
 
@@ -117,7 +127,7 @@ export function tick(sim: Sim, count = 1): void {
 function apply(sim: Sim, id: NodeId, event: Event): void {
   const { state, outbox } = step(nodeState(sim, id), event)
   sim.nodes.set(id, state)
-  send(sim.bus, sim.prng, sim.now, outbox)
+  send(sim.bus, sim.prng, sim.now, outbox, sim.tracer)
 }
 
 // --- Node lifecycle ---
@@ -130,6 +140,7 @@ function apply(sim: Sim, id: NodeId, event: Event): void {
 export function kill(sim: Sim, id: NodeId): void {
   nodeState(sim, id)
   sim.alive.delete(id)
+  record(sim.tracer, { tick: sim.now, kind: 'kill', id })
 }
 
 /**
@@ -163,6 +174,7 @@ export function revive(sim: Sim, id: NodeId): void {
   })
 
   sim.alive.add(id)
+  record(sim.tracer, { tick: sim.now, kind: 'revive', id })
 }
 
 export function isAlive(sim: Sim, id: NodeId): boolean {
@@ -173,10 +185,12 @@ export function isAlive(sim: Sim, id: NodeId): boolean {
 
 export function partitionCluster(sim: Sim, groups: NodeId[][]): void {
   partition(sim.bus, groups)
+  record(sim.tracer, { tick: sim.now, kind: 'partition', groups })
 }
 
 export function healCluster(sim: Sim): void {
   heal(sim.bus)
+  record(sim.tracer, { tick: sim.now, kind: 'partition', groups: null })
 }
 
 // --- Inspection ---
@@ -211,8 +225,20 @@ export function submit(sim: Sim, command: Command): NodeId | null {
   const [leader] = leaders(sim)
   if (!leader) return null
 
-  apply(sim, leader.id, { type: 'client-command', command })
+  submitTo(sim, leader.id, command)
   return leader.id
+}
+
+/**
+ * Submit a command to a named node.
+ *
+ * Needed when the cluster is partitioned and holds more than one leader in
+ * different terms — legal under Election Safety, and exactly the situation a
+ * scripted scenario wants to steer. A node that is not a leader ignores it.
+ */
+export function submitTo(sim: Sim, id: NodeId, command: Command): void {
+  record(sim.tracer, { tick: sim.now, kind: 'client-command', to: id, command })
+  apply(sim, id, { type: 'client-command', command })
 }
 
 /** Messages currently on the wire. For assertions and, later, the visualization. */

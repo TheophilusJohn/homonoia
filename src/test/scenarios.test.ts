@@ -1,9 +1,22 @@
 import { describe, expect, it } from 'vitest'
 
 import type { LogEntry, NodeId } from '../raft/types'
-import { allNodes, createSim, kill, leaders, liveNodes, nodeState, revive, submit } from '../sim/sim'
+import {
+  allNodes,
+  createSim,
+  healCluster,
+  kill,
+  leaders,
+  liveNodes,
+  nodeState,
+  partitionCluster,
+  revive,
+  submit,
+  submitTo,
+  tick,
+} from '../sim/sim'
 import type { Sim, SimOptions } from '../sim/sim'
-import { runChecked } from './invariants'
+import { checkAll, createChecker, runChecked } from './invariants'
 
 /**
  * Named scenarios. Each one is a specific way the cluster can be attacked;
@@ -194,5 +207,128 @@ describe('duplicated messages', () => {
     const [first, ...rest] = allNodes(sim)
     expect(first.log).toHaveLength(8)
     for (const node of rest) expect(node.log).toEqual(first.log)
+  })
+})
+
+/**
+ * Figure 8, scripted.
+ *
+ * The random fuzz schedule finds this on the order of one seed in a thousand —
+ * it needs four things to line up (an entry stranded on a minority, a competing
+ * higher-term entry at the same index, the node holding it unreachable while
+ * the old entry reaches a majority, then reachable again), and an untargeted
+ * adversary almost never arranges all four. So it is scripted here instead.
+ *
+ * This is the end-to-end version of the unit tests in
+ * src/raft/replication.test.ts: the same rule, exercised through the real
+ * network with real elections rather than by handing a leader a response.
+ */
+describe('figure 8', () => {
+  const FIVE: NodeId[] = ['n1', 'n2', 'n3', 'n4', 'n5']
+
+  function scripted() {
+    const sim = createSim({
+      seed: 8888,
+      nodes: FIVE,
+      latency: { min: 1, max: 2 },
+      electionTimeout: { min: 50, max: 100 },
+    })
+    const checker = createChecker()
+
+    const advance = (ticks: number) => {
+      for (let i = 0; i < ticks; i++) {
+        tick(sim)
+        const violation = checkAll(sim, checker)
+        if (violation) {
+          throw new Error(
+            `${violation.property} violated at tick ${violation.tick}\n${violation.detail}`,
+          )
+        }
+      }
+    }
+
+    // (a) A leader emerges and takes a command that reaches only a minority:
+    // the partition forms before the AppendEntries can be delivered.
+    advance(300)
+    const oldLeader = leaders(sim)[0].id
+    const rest = FIVE.filter((id) => id !== oldLeader)
+    const ally = rest[0]
+    const majoritySide = rest.slice(1)
+
+    partitionCluster(sim, [[oldLeader, ally], majoritySide])
+    submitTo(sim, oldLeader, { key: 'x', value: 'STRANDED' })
+    advance(400)
+
+    const strandedIndex = nodeState(sim, oldLeader).log.length
+    expect(nodeState(sim, oldLeader).log.at(-1)?.command.value).toBe('STRANDED')
+
+    // (b) The majority side elects its own leader, which appends a competing
+    // entry at the same index — then is isolated before it can replicate it.
+    const rival = leaders(sim).find((leader) => majoritySide.includes(leader.id))!.id
+    submitTo(sim, rival, { key: 'x', value: 'RIVAL' })
+    partitionCluster(sim, [[rival], FIVE.filter((id) => id !== rival)])
+    advance(50)
+
+    const rivalEntry = nodeState(sim, rival).log[strandedIndex - 1]
+    expect(rivalEntry?.command.value).toBe('RIVAL')
+    // The competing entry is at the same index, in a strictly later term.
+    expect(rivalEntry.term).toBeGreaterThan(
+      nodeState(sim, oldLeader).log[strandedIndex - 1].term,
+    )
+
+    // (c) Everyone except the rival reunites. A node holding the stranded entry
+    // wins — its log is longer than the two that never saw it — and pushes the
+    // stranded entry out to a majority of the whole cluster.
+    advance(400)
+    const revived = leaders(sim).find((leader) => leader.id !== rival)!.id
+    advance(300)
+
+    const holders = FIVE.filter(
+      (id) => nodeState(sim, id).log[strandedIndex - 1]?.command.value === 'STRANDED',
+    )
+    expect(holders.length * 2).toBeGreaterThan(FIVE.length)
+
+    return { sim, advance, strandedIndex, rival, revived }
+  }
+
+  it('does not commit the stranded entry even though a majority holds it', () => {
+    const { sim, strandedIndex, revived } = scripted()
+
+    // This is the whole point. A majority holds it, and it stays uncommitted,
+    // because it is from an earlier term than the leader that replicated it.
+    expect(nodeState(sim, revived).commitIndex).toBeLessThan(strandedIndex)
+  })
+
+  it('lets the rival overwrite it, and no committed entry is lost', () => {
+    const { sim, advance, strandedIndex, rival, revived } = scripted()
+
+    // The leader that spread the stranded entry dies; the rival comes back.
+    kill(sim, revived)
+    healCluster(sim)
+    advance(800)
+
+    // The new leader cannot commit anything it inherited until it commits an
+    // entry of its own term — the same restriction again. Give it one, and the
+    // whole prefix commits with it.
+    const winner = leaders(sim)[0]
+    expect(winner).toBeDefined()
+    submitTo(sim, winner.id, { key: 'seal', value: 'CURRENT-TERM' })
+    advance(600)
+
+    // The rival's log was more up-to-date by term, so it won, and its entry
+    // replaced the stranded one at that index.
+    const survivors = liveNodes(sim).filter(
+      (node) => node.log.length >= strandedIndex && node.commitIndex >= strandedIndex,
+    )
+    expect(survivors.length).toBeGreaterThan(0)
+    for (const node of survivors) {
+      expect(node.log[strandedIndex - 1].command.value).toBe('RIVAL')
+    }
+
+    // advance() has been asserting all five properties the whole way. The
+    // stranded entry was overwritten and nothing was violated — because it was
+    // never committed. Drop the current-term restriction and this exact
+    // sequence reports the overwrite as a lost committed entry.
+    expect(nodeState(sim, rival).log[strandedIndex - 1].command.value).toBe('RIVAL')
   })
 })

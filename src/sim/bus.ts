@@ -1,5 +1,7 @@
 import type { Message, NodeId } from '../raft/types'
 import type { Prng } from './prng'
+import { record } from './trace'
+import type { Tracer } from './trace'
 
 /**
  * The simulated network.
@@ -86,31 +88,45 @@ export function createBus(config: BusConfig): Bus {
 }
 
 /** Hand messages to the network. They are not delivered here. */
-export function send(bus: Bus, prng: Prng, now: number, messages: readonly Message[]): void {
+export function send(
+  bus: Bus,
+  prng: Prng,
+  now: number,
+  messages: readonly Message[],
+  tracer: Tracer,
+): void {
   for (const message of messages) {
     bus.stats.sent += 1
 
     if (prng.nextFloat() < bus.config.dropProbability) {
       bus.stats.dropped += 1
+      record(tracer, { tick: now, kind: 'drop', message, reason: 'random' })
       continue
     }
 
-    enqueue(bus, prng, now, message)
+    enqueue(bus, prng, now, message, tracer, 'send')
 
     if (prng.nextFloat() < bus.config.duplicateProbability) {
       bus.stats.duplicated += 1
-      enqueue(bus, prng, now, message)
+      enqueue(bus, prng, now, message, tracer, 'duplicate')
     }
   }
 }
 
-function enqueue(bus: Bus, prng: Prng, now: number, message: Message): void {
+function enqueue(
+  bus: Bus,
+  prng: Prng,
+  now: number,
+  message: Message,
+  tracer: Tracer,
+  kind: 'send' | 'duplicate',
+): void {
   const { min, max } = bus.config.latency
-  bus.inFlight.push({
-    message,
-    deliverAt: now + prng.nextInt(min, max + 1),
-    seq: bus.seq++,
-  })
+  const deliverAt = now + prng.nextInt(min, max + 1)
+  const seq = bus.seq++
+
+  bus.inFlight.push({ message, deliverAt, seq })
+  record(tracer, { tick: now, kind, seq, message, deliverAt })
 }
 
 /**
@@ -120,7 +136,7 @@ function enqueue(bus: Bus, prng: Prng, now: number, message: Message): void {
  * already on the wire when a partition forms is discarded, and one that is
  * still in flight when the partition heals gets through.
  */
-export function collectDue(bus: Bus, now: number): Message[] {
+export function collectDue(bus: Bus, now: number, tracer: Tracer): Message[] {
   const due: InFlight[] = []
   const waiting: InFlight[] = []
 
@@ -136,9 +152,11 @@ export function collectDue(bus: Bus, now: number): Message[] {
   for (const flight of due) {
     if (!canReach(bus, flight.message.from, flight.message.to)) {
       bus.stats.partitioned += 1
+      record(tracer, { tick: now, kind: 'drop', message: flight.message, reason: 'partition' })
       continue
     }
     bus.stats.delivered += 1
+    record(tracer, { tick: now, kind: 'deliver', seq: flight.seq, message: flight.message })
     delivered.push(flight.message)
   }
 

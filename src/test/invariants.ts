@@ -1,17 +1,62 @@
-import { expect } from 'vitest'
-
-import type { NodeId } from '../raft/types'
+import { entryAt } from '../raft/log'
+import type { LogEntry, NodeId } from '../raft/types'
 import { allNodes, leaders, liveNodes, tick } from '../sim/sim'
 import type { Sim } from '../sim/sim'
 
 /**
- * Safety properties as predicates over the whole cluster, asserted after every
- * tick rather than spot-checked at the end of a run.
+ * Raft's five safety properties, as predicates over the whole cluster, checked
+ * after every tick.
  *
- * Three of the five are here. Leader Append-Only and the full run-global form
- * of State Machine Safety need history accumulated across the whole run, which
- * arrives with the fuzz harness in milestone 5.
+ * Three are stateless — they read the current cluster and nothing else. Two
+ * need history accumulated across the whole run:
+ *
+ *   - Leader Append-Only compares each leader's log against its own log one
+ *     tick earlier.
+ *   - State Machine Safety needs to know what was *ever* committed at an index,
+ *     because the violation is an index changing value long after the fact.
+ *
+ * The shadow history lives here, in the checker. The algorithm cannot read it
+ * and does not know it exists — if the implementation needed it, it would not
+ * be an implementation of Raft.
  */
+
+export interface Violation {
+  readonly property: string
+  readonly tick: number
+  readonly detail: string
+}
+
+interface CommittedRecord {
+  readonly entry: LogEntry
+  /** Term of the node that first reported this index committed. */
+  readonly inTerm: number
+}
+
+export interface Checker {
+  /** Shadow history: log index -> the entry that was committed there. Append-only. */
+  readonly committed: Map<number, CommittedRecord>
+  /** Log snapshot per `${id}@${term}`. Keyed by term because a node is only continuously leader within one. */
+  readonly leaderLogs: Map<string, readonly LogEntry[]>
+  /** Cheap change detection per node, so committed prefixes are not rescanned every tick. */
+  readonly seen: Map<NodeId, { logRef: readonly LogEntry[]; verifiedTo: number }>
+}
+
+export function createChecker(): Checker {
+  return { committed: new Map(), leaderLogs: new Map(), seen: new Map() }
+}
+
+function sameEntry(a: LogEntry, b: LogEntry): boolean {
+  return a.term === b.term && a.command.key === b.command.key && a.command.value === b.command.value
+}
+
+function isPrefix(prefix: readonly LogEntry[], log: readonly LogEntry[]): boolean {
+  if (prefix.length > log.length) return false
+  return prefix.every((entry, i) => sameEntry(entry, log[i]))
+}
+
+function describe(log: readonly LogEntry[]): string {
+  return `[${log.map((e, i) => `${i + 1}:t${e.term}:${e.command.key}=${e.command.value}`).join(' ')}]`
+}
 
 /**
  * Property 1, Election Safety: at most one leader per term.
@@ -19,7 +64,7 @@ import type { Sim } from '../sim/sim'
  * Live nodes only. A killed node's state is frozen mid-role, so a dead leader
  * still claims the title; it is not running and cannot act on it.
  */
-function electionSafety(sim: Sim): void {
+function electionSafety(sim: Sim): Violation | null {
   const byTerm = new Map<number, NodeId[]>()
 
   for (const leader of leaders(sim)) {
@@ -27,8 +72,42 @@ function electionSafety(sim: Sim): void {
   }
 
   for (const [term, ids] of byTerm) {
-    expect(ids, `two leaders in term ${term} at tick ${sim.now}`).toHaveLength(1)
+    if (ids.length > 1) {
+      return {
+        property: 'Election Safety',
+        tick: sim.now,
+        detail: `${ids.length} leaders in term ${term}: ${ids.join(', ')}`,
+      }
+    }
   }
+  return null
+}
+
+/**
+ * Property 2, Leader Append-Only: a leader never overwrites or deletes entries
+ * in its own log.
+ *
+ * Keyed by id *and* term. A node that steps down, has its log truncated as a
+ * follower, and is later elected again is not the same leader — its earlier
+ * snapshot says nothing about the new one. Within a single term a leader never
+ * steps down and back up, so id+term is exactly "continuously leader".
+ */
+function leaderAppendOnly(sim: Sim, checker: Checker): Violation | null {
+  for (const leader of leaders(sim)) {
+    const key = `${leader.id}@${leader.currentTerm}`
+    const previous = checker.leaderLogs.get(key)
+
+    if (previous !== undefined && !isPrefix(previous, leader.log)) {
+      return {
+        property: 'Leader Append-Only',
+        tick: sim.now,
+        detail: `${leader.id} in term ${leader.currentTerm} no longer extends its own log\n  was: ${describe(previous)}\n  now: ${describe(leader.log)}`,
+      }
+    }
+
+    checker.leaderLogs.set(key, leader.log)
+  }
+  return null
 }
 
 /**
@@ -36,9 +115,10 @@ function electionSafety(sim: Sim): void {
  * term, they are identical in every preceding entry.
  *
  * Every node, dead ones included — a log is persistent state and survives a
- * crash, so a dead node's log is just as real as a live one's.
+ * crash. Checking the highest shared index whose terms agree is sufficient: if
+ * the prefixes match there, they match at every lower index too.
  */
-function logMatching(sim: Sim): void {
+function logMatching(sim: Sim): Violation | null {
   const all = allNodes(sim)
 
   for (let a = 0; a < all.length; a++) {
@@ -48,47 +128,136 @@ function logMatching(sim: Sim): void {
       for (let i = shared - 1; i >= 0; i--) {
         if (all[a].log[i].term !== all[b].log[i].term) continue
 
-        expect(
-          all[a].log.slice(0, i + 1),
-          `log mismatch below index ${i + 1} between ${all[a].id} and ${all[b].id} at tick ${sim.now}`,
-        ).toEqual(all[b].log.slice(0, i + 1))
+        if (!isPrefix(all[a].log.slice(0, i + 1), all[b].log.slice(0, i + 1))) {
+          return {
+            property: 'Log Matching',
+            tick: sim.now,
+            detail: `${all[a].id} and ${all[b].id} agree on index ${i + 1} term ${all[a].log[i].term} but differ below it\n  ${all[a].id}: ${describe(all[a].log.slice(0, i + 1))}\n  ${all[b].id}: ${describe(all[b].log.slice(0, i + 1))}`,
+          }
+        }
         break
       }
     }
   }
+  return null
 }
 
 /**
- * Property 5, State Machine Safety, in its within-run form: no two live nodes
- * hold different entries at the same committed index.
+ * Property 5, State Machine Safety: no two nodes ever hold different entries at
+ * the same committed index.
  *
- * commitIndex is volatile, so a dead node has nothing meaningful to compare.
+ * This is where the shadow history earns its place — the violation is an index
+ * that was committed as one command and later reads as another, which no
+ * snapshot of the present can see.
+ *
+ * The rescan is skipped when a node's log is the same array it was last tick.
+ * The core is pure and only builds a new log array when the log actually
+ * changes, so reference equality is a sound "nothing was truncated" test.
  */
-function committedPrefixAgreement(sim: Sim): void {
-  const live = liveNodes(sim)
+function stateMachineSafety(sim: Sim, checker: Checker): Violation | null {
+  for (const node of liveNodes(sim)) {
+    const previous = checker.seen.get(node.id)
+    const logChanged = previous === undefined || previous.logRef !== node.log
+    const from = logChanged ? 1 : previous.verifiedTo + 1
 
-  for (let a = 0; a < live.length; a++) {
-    for (let b = a + 1; b < live.length; b++) {
-      const upTo = Math.min(live[a].commitIndex, live[b].commitIndex)
+    for (let index = from; index <= node.commitIndex; index++) {
+      const entry = entryAt(node.log, index)
 
-      expect(
-        live[a].log.slice(0, upTo),
-        `committed prefix diverged between ${live[a].id} and ${live[b].id} at tick ${sim.now}`,
-      ).toEqual(live[b].log.slice(0, upTo))
+      if (entry === undefined) {
+        return {
+          property: 'State Machine Safety',
+          tick: sim.now,
+          detail: `${node.id} has commitIndex ${node.commitIndex} but only ${node.log.length} entries`,
+        }
+      }
+
+      const known = checker.committed.get(index)
+      if (known === undefined) {
+        checker.committed.set(index, { entry, inTerm: node.currentTerm })
+      } else if (!sameEntry(known.entry, entry)) {
+        return {
+          property: 'State Machine Safety',
+          tick: sim.now,
+          detail:
+            `index ${index} was committed as t${known.entry.term}:${known.entry.command.key}=${known.entry.command.value} ` +
+            `but ${node.id} now has it committed as t${entry.term}:${entry.command.key}=${entry.command.value}`,
+        }
+      }
+    }
+
+    checker.seen.set(node.id, { logRef: node.log, verifiedTo: node.commitIndex })
+  }
+  return null
+}
+
+/**
+ * Property 4, Leader Completeness: an entry committed in a given term is
+ * present in the log of every leader of every higher term.
+ *
+ * Checked against the shadow history rather than the present, for the same
+ * reason as property 5: the entry may have been committed thousands of ticks
+ * and several leaders ago.
+ */
+function leaderCompleteness(sim: Sim, checker: Checker): Violation | null {
+  for (const leader of leaders(sim)) {
+    for (const [index, record] of checker.committed) {
+      if (record.inTerm >= leader.currentTerm) continue
+
+      const held = entryAt(leader.log, index)
+      if (held === undefined || !sameEntry(held, record.entry)) {
+        return {
+          property: 'Leader Completeness',
+          tick: sim.now,
+          detail:
+            `${leader.id} is leader in term ${leader.currentTerm} but is missing index ${index}, ` +
+            `committed in term ${record.inTerm} as t${record.entry.term}:${record.entry.command.key}=${record.entry.command.value}` +
+            (held ? ` (holds t${held.term}:${held.command.key}=${held.command.value} instead)` : ' (log too short)'),
+        }
+      }
     }
   }
+  return null
 }
 
-export function checkInvariants(sim: Sim): void {
-  electionSafety(sim)
-  logMatching(sim)
-  committedPrefixAgreement(sim)
+/** All five, in order. Returns the first violation found, or null. */
+export function checkAll(sim: Sim, checker: Checker): Violation | null {
+  return (
+    electionSafety(sim) ??
+    leaderAppendOnly(sim, checker) ??
+    logMatching(sim) ??
+    stateMachineSafety(sim, checker) ??
+    leaderCompleteness(sim, checker)
+  )
 }
 
-/** Advance the sim, checking the safety properties after every tick. */
-export function runChecked(sim: Sim, ticks: number): void {
+/**
+ * One checker per sim, so the run-global history survives across separate
+ * `runChecked` calls. A test that ticks in a loop would otherwise reset the
+ * shadow history on every call and never see a late violation.
+ */
+const checkers = new WeakMap<Sim, Checker>()
+
+function checkerFor(sim: Sim): Checker {
+  const existing = checkers.get(sim)
+  if (existing) return existing
+
+  const fresh = createChecker()
+  checkers.set(sim, fresh)
+  return fresh
+}
+
+/**
+ * Advance the sim, checking all five properties after every tick. Throws on the
+ * tick a property first goes false.
+ */
+export function runChecked(sim: Sim, ticks: number, checker: Checker = checkerFor(sim)): void {
   for (let i = 0; i < ticks; i++) {
     tick(sim)
-    checkInvariants(sim)
+    const violation = checkAll(sim, checker)
+    if (violation) {
+      throw new Error(
+        `${violation.property} violated at tick ${violation.tick} (seed ${sim.seed})\n${violation.detail}`,
+      )
+    }
   }
 }
