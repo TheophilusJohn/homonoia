@@ -1,0 +1,425 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Homonoia — design prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --void:#090B12; --field:#0C0F17; --panel:#10131C;
+  --rule:#1B2030; --rule-hi:#2A3146;
+  --ink:#E8E3D6; --dim:#8E95A6; --mute:#555D71;
+  --leader:#E5A23C; --cand:#9B8CF0;
+  --follow:#586279; --oxide:#C25438;
+  --ease:cubic-bezier(.2,.8,.2,1);
+  --snap:cubic-bezier(.35,1.4,.5,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--void); color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,sans-serif; font-size:13px;
+  -webkit-font-smoothing:antialiased;
+  display:flex; flex-direction:column; overflow:hidden;
+}
+.mono{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
+
+/* ── header ─────────────────────────────── */
+header{
+  display:flex;align-items:baseline;gap:20px;
+  padding:14px 22px;border-bottom:1px solid var(--rule);
+  background:linear-gradient(180deg,#0E1119,var(--void));
+}
+.mark{font-family:"Instrument Serif",serif;font-size:23px;letter-spacing:.01em}
+.mark em{font-style:italic;color:var(--leader)}
+.tag{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--mute)}
+.hstats{margin-left:auto;display:flex;gap:22px;align-items:baseline}
+.stat{display:flex;flex-direction:column;gap:3px}
+.stat span:first-child{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}
+.stat span:last-child{font-family:"IBM Plex Mono",monospace;font-size:15px;font-variant-numeric:tabular-nums}
+#phase{color:var(--leader);transition:color .5s var(--ease)}
+
+/* ── main ───────────────────────────────── */
+main{flex:1;display:grid;grid-template-columns:1fr 340px;min-height:0}
+#field{position:relative;background:
+  radial-gradient(ellipse 70% 60% at 50% 45%,#111624 0%,var(--field) 60%,var(--void) 100%);
+  border-right:1px solid var(--rule);min-height:0}
+canvas{display:block;width:100%;height:100%}
+.banner{
+  position:absolute;top:16px;left:50%;transform:translateX(-50%) translateY(-8px);
+  font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;
+  padding:6px 16px;border:1px solid var(--oxide);color:var(--oxide);
+  background:rgba(194,84,56,.09);border-radius:2px;
+  opacity:0;transition:opacity .45s var(--ease),transform .45s var(--ease);pointer-events:none
+}
+.banner.on{opacity:1;transform:translateX(-50%) translateY(0)}
+.hint{position:absolute;bottom:14px;left:20px;font-size:10.5px;color:var(--mute);letter-spacing:.04em}
+
+/* ── side ───────────────────────────────── */
+aside{display:flex;flex-direction:column;min-height:0;background:var(--panel)}
+.sec{padding:13px 18px 9px;border-bottom:1px solid var(--rule)}
+.sec h2{font-size:9.5px;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:var(--mute)}
+
+/* ledger */
+#ledger{padding:12px 18px 16px;border-bottom:1px solid var(--rule)}
+.row{display:flex;align-items:center;gap:10px;margin-bottom:7px}
+.rid{width:52px;display:flex;align-items:center;gap:6px;flex-shrink:0}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--follow);transition:background .4s var(--ease),box-shadow .4s var(--ease)}
+.dot.leader{background:var(--leader);box-shadow:0 0 9px rgba(229,162,60,.7)}
+.dot.cand{background:var(--cand);box-shadow:0 0 9px rgba(155,140,240,.6)}
+.dot.dead{background:#2A3044;box-shadow:none}
+.rid b{font-family:"IBM Plex Mono",monospace;font-size:11.5px;font-weight:400;color:var(--dim)}
+.cells{display:flex;gap:3px}
+.cell{
+  width:19px;height:22px;border-radius:2px;
+  display:flex;align-items:center;justify-content:center;
+  font-family:"IBM Plex Mono",monospace;font-size:10px;
+  border:1px solid var(--rule-hi);color:var(--mute);background:transparent;
+  transition:all .5s var(--ease);
+}
+.cell.pend{border-color:rgba(155,140,240,.5);color:#9B8CF0;background:rgba(155,140,240,.07);animation:breathe 2.1s ease-in-out infinite}
+.cell.done{border-color:transparent;background:var(--ink);color:#0B0E15;transform:scale(1)}
+.cell.enter{animation:crystal .55s var(--snap)}
+.cell.ghost{border-color:rgba(194,84,56,.5);color:var(--oxide);background:rgba(194,84,56,.08)}
+.cell.shatter{animation:shatter .4s var(--ease) forwards}
+@keyframes breathe{0%,100%{opacity:.55}50%{opacity:1}}
+@keyframes crystal{0%{transform:scale(1.5);opacity:.3}60%{transform:scale(.94)}100%{transform:scale(1);opacity:1}}
+@keyframes shatter{to{opacity:0;transform:scale(.6) translateY(4px);filter:blur(2px)}}
+.rowmeta{margin-left:auto;font-family:"IBM Plex Mono",monospace;font-size:10px;color:var(--mute)}
+
+/* stream */
+#stream{flex:1;overflow:hidden;padding:6px 18px 14px;display:flex;flex-direction:column;justify-content:flex-end;min-height:0}
+.ev{font-family:"IBM Plex Mono",monospace;font-size:10.5px;line-height:1.85;color:var(--mute);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;animation:slide .3s var(--ease)}
+@keyframes slide{from{opacity:0;transform:translateX(-5px)}}
+.ev b{font-weight:400;color:var(--dim)}
+.ev.hi b,.ev.hi{color:var(--leader)}
+.ev.warn,.ev.warn b{color:var(--oxide)}
+.ev.good b{color:var(--ink)}
+
+/* ── controls ───────────────────────────── */
+footer{display:flex;align-items:center;gap:18px;padding:11px 22px;
+  border-top:1px solid var(--rule);background:#0B0E15}
+button{background:transparent;border:1px solid var(--rule-hi);color:var(--dim);
+  font-family:inherit;font-size:11.5px;padding:6px 13px;border-radius:2px;cursor:pointer;
+  transition:all .18s var(--ease)}
+button:hover{border-color:var(--mute);color:var(--ink)}
+button:active{transform:scale(.97)}
+button.hot{border-color:var(--oxide);color:var(--oxide)}
+button:focus-visible{outline:2px solid var(--leader);outline-offset:2px}
+.sl{display:flex;align-items:center;gap:9px}
+.sl label{font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--mute)}
+.sl output{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--dim);min-width:34px}
+input[type=range]{-webkit-appearance:none;appearance:none;width:76px;height:2px;background:var(--rule-hi);border-radius:2px}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;border-radius:50%;
+  background:var(--ink);cursor:pointer;transition:transform .15s var(--ease)}
+input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.25)}
+input[type=range]::-moz-range-thumb{width:11px;height:11px;border:0;border-radius:50%;background:var(--ink);cursor:pointer}
+.spacer{margin-left:auto}
+@media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+@media (max-width:900px){main{grid-template-columns:1fr}aside{display:none}}
+</style>
+
+<header>
+  <div class="mark">Homo<em>noia</em></div>
+  <div class="tag">Raft consensus · observatory</div>
+  <div class="hstats">
+    <div class="stat"><span>Phase</span><span id="phase">steady</span></div>
+    <div class="stat"><span>Term</span><span class="mono" id="term">4</span></div>
+    <div class="stat"><span>Commit</span><span class="mono" id="ci">0</span></div>
+    <div class="stat"><span>Tick</span><span class="mono" id="tick">0</span></div>
+  </div>
+</header>
+
+<main>
+  <div id="field">
+    <canvas id="cv"></canvas>
+    <div class="banner" id="banner">Network partitioned · 2 ⁄ 3</div>
+    <div class="hint">Click a node to kill or revive it</div>
+  </div>
+
+  <aside>
+    <div class="sec"><h2>Replicated log</h2></div>
+    <div id="ledger"></div>
+    <div class="sec"><h2>Event stream</h2></div>
+    <div id="stream"></div>
+  </aside>
+</main>
+
+<footer>
+  <button id="play">Pause</button>
+  <button id="part" class="hot">Partition</button>
+  <div class="sl"><label>Speed</label><input type="range" id="spd" min="0.2" max="2.5" step="0.1" value="1"><output id="spdo">1.0×</output></div>
+  <div class="sl"><label>Latency</label><input type="range" id="lat" min="1" max="10" step="1" value="4"><output id="lato">4</output></div>
+  <div class="sl"><label>Drop</label><input type="range" id="drp" min="0" max="40" step="5" value="0"><output id="drpo">0%</output></div>
+  <div class="spacer sl"><label>Seed</label><span class="mono" style="color:var(--dim)">0x7F3A2C</span></div>
+</footer>
+
+<script>
+const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
+const IDS=['A','B','C','D','E'];
+let W=0,H=0,DPR=Math.min(devicePixelRatio||1,2);
+
+const N=IDS.map((id,i)=>({id,i,state:'follower',term:4,alive:true,pulse:0,glow:0,jitter:0,ox:0,oy:0,x:0,y:0}));
+let msgs=[],ripples=[],partition=null,tick=0,commitIdx=0,term=4,playing=true,speed=1,latency=4,drop=0,t0=0;
+const logs=IDS.map(()=>[]);           // {t:term, done:bool, ghost:bool}
+let leader=2, phase='steady', script=0, acc=0;
+
+function resize(){
+  const r=cv.parentElement.getBoundingClientRect();
+  W=r.width;H=r.height;cv.width=W*DPR;cv.height=H*DPR;
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  const cx=W/2,cy=H/2,R=Math.min(W,H)*0.31;
+  N.forEach((n,i)=>{const a=-Math.PI/2+i*2*Math.PI/5;n.x=cx+Math.cos(a)*R;n.y=cy+Math.sin(a)*R});
+}
+addEventListener('resize',resize);
+
+/* ── events ─────────────────────────────── */
+const stream=document.getElementById('stream');
+function ev(html,cls=''){
+  const d=document.createElement('div');d.className='ev '+cls;d.innerHTML=html;
+  stream.appendChild(d);while(stream.children.length>26)stream.removeChild(stream.firstChild);
+}
+
+/* ── ledger ─────────────────────────────── */
+const led=document.getElementById('ledger');
+IDS.forEach(id=>{
+  led.insertAdjacentHTML('beforeend',
+    `<div class="row"><div class="rid"><i class="dot" data-d="${id}"></i><b>${id}</b></div>
+     <div class="cells" data-c="${id}"></div><div class="rowmeta" data-m="${id}"></div></div>`);
+});
+function paint(){
+  IDS.forEach((id,i)=>{
+    const box=led.querySelector(`[data-c="${id}"]`),L=logs[i];
+    while(box.children.length>L.length)box.removeChild(box.lastChild);
+    L.forEach((e,k)=>{
+      let c=box.children[k];
+      if(!c){c=document.createElement('div');c.className='cell enter';c.textContent=e.t;box.appendChild(c)}
+      const want='cell '+(e.ghost?'ghost':e.done?'done':'pend');
+      if(!c.className.startsWith(want))c.className=want+(c.classList.contains('enter')?' enter':'');
+      c.textContent=e.t;
+    });
+    const d=led.querySelector(`[data-d="${id}"]`),n=N[i];
+    d.className='dot '+(!n.alive?'dead':n.state==='leader'?'leader':n.state==='candidate'?'cand':'');
+    led.querySelector(`[data-m="${id}"]`).textContent=!n.alive?'down':'t'+n.term;
+  });
+  document.getElementById('term').textContent=term;
+  document.getElementById('ci').textContent=commitIdx;
+  document.getElementById('tick').textContent=String(tick).padStart(4,'0');
+  document.getElementById('phase').textContent=phase;
+}
+
+/* ── sim primitives ─────────────────────── */
+function blocked(a,b){
+  if(!partition)return false;
+  return partition.includes(IDS[a])!==partition.includes(IDS[b]);
+}
+function send(from,to,type){
+  if(!N[from].alive||!N[to].alive)return;
+  const dropped=Math.random()*100<drop, cut=blocked(from,to);
+  msgs.push({from,to,type,p:0,sp:1/(latency*11),dropped:dropped||cut,cutAt:cut?0.5:(dropped?0.35+Math.random()*.3:1)});
+}
+function ripple(i,color){ripples.push({x:N[i].x,y:N[i].y,r:0,a:.55,c:color})}
+
+function heartbeat(){
+  const L=leader;if(!N[L].alive)return;
+  N[L].pulse=1;ripple(L,'229,162,60');
+  N.forEach((n,i)=>{if(i!==L)send(L,i,'AE')});
+  ev(`<b>${IDS[L]}</b> → all · AppendEntries · term ${term}`);
+}
+function appendCmd(target,cmd){
+  logs[target].push({t:term,done:false,ghost:false});
+  N[target].pulse=1;
+  ev(`client → <b>${IDS[target]}</b> · set ${cmd}`,'hi');
+}
+function replicate(){
+  const L=leader,src=logs[L];
+  N.forEach((n,i)=>{
+    if(i===L||!n.alive||blocked(L,i))return;
+    if(logs[i].length<src.length){logs[i].push({t:src[logs[i].length].t,done:false,ghost:false});send(L,i,'AE')}
+  });
+}
+function commitAdvance(){
+  const L=leader,src=logs[L];
+  let reachable=N.filter((n,i)=>n.alive&&!blocked(L,i)).length;
+  if(reachable<3)return false;
+  const idx=src.findIndex(e=>!e.done);if(idx<0)return false;
+  let reps=N.filter((n,i)=>n.alive&&!blocked(L,i)&&logs[i].length>idx).length;
+  if(reps<3)return false;
+  commitIdx=idx+1;
+  IDS.forEach((id,i)=>{
+    if(logs[i][idx]&&!blocked(L,i)&&N[i].alive)
+      setTimeout(()=>{if(logs[i][idx]){logs[i][idx].done=true;paint()}},i*70);
+  });
+  ripple(L,'232,227,214');
+  ev(`commit index → <b>${idx+1}</b> · majority replicated`,'good');
+  return true;
+}
+
+/* ── scripted timeline ──────────────────── */
+const TL=[
+ {at:0,   f:()=>{phase='steady';N[2].state='leader';ev('<b>C</b> elected leader · term 4','hi');
+                 IDS.forEach((_,i)=>{logs[i]=[{t:3,done:true},{t:4,done:true}]});commitIdx=2;paint()}},
+ {at:900, f:()=>{appendCmd(leader,'x=1');replicate()}},
+ {at:1500,f:()=>commitAdvance()},
+ {at:2400,f:()=>{appendCmd(leader,'y=7');replicate()}},
+ {at:3000,f:()=>commitAdvance()},
+ {at:4000,f:()=>{partition=['A','B'];phase='partitioned';
+                 document.getElementById('banner').classList.add('on');
+                 ev('network partitioned · {A,B} ⁄ {C,D,E}','warn')}},
+ {at:4800,f:()=>{appendCmd(leader,'z=9');replicate()}},
+ {at:5400,f:()=>{commitAdvance();ev('majority side commits normally','good')}},
+ {at:6200,f:()=>{N[0].state='candidate';N[0].term=5;
+                 ev('<b>A</b> election timeout · term 5','warn');send(0,1,'RV')}},
+ {at:6900,f:()=>{logs[0].push({t:5,done:false,ghost:true});
+                 ev('<b>A</b> has no quorum · entry stalls uncommitted','warn')}},
+ {at:7600,f:()=>{N[0].term=6;ev('<b>A</b> retries · term 6 · still 2 ⁄ 5','warn')}},
+ {at:8400,f:()=>{appendCmd(leader,'w=2');replicate()}},
+ {at:9000,f:()=>commitAdvance()},
+ {at:10000,f:()=>{partition=null;phase='healing';
+                 document.getElementById('banner').classList.remove('on');
+                 ev('partition healed','good')}},
+ {at:10500,f:()=>{
+    logs[0].forEach((e,k)=>{if(e.ghost){const c=led.querySelector('[data-c="A"]').children[k];
+      if(c)c.classList.add('shatter')}});
+    ev('<b>A</b> log conflict at index 3 · truncating','warn')}},
+ {at:11100,f:()=>{logs[0]=logs[0].filter(e=>!e.ghost);N[0].state='follower';N[0].term=term;paint();
+                 send(leader,0,'AE');send(leader,1,'AE')}},
+ {at:11700,f:()=>{[0,1].forEach(i=>{while(logs[i].length<logs[leader].length)
+                   logs[i].push({...logs[leader][logs[i].length]});});
+                 ev('<b>A</b>, <b>B</b> converged to leader log','good');paint()}},
+ {at:12600,f:()=>{phase='steady';ev('cluster in agreement · 5 ⁄ 5','good')}},
+ {at:13600,f:()=>{msgs=[];logs.forEach(l=>l.length=0);script=0;acc=0;commitIdx=0;
+                  N.forEach(n=>{n.state='follower';n.term=4;n.alive=true});term=4}},
+];
+
+/* ── render ─────────────────────────────── */
+function bez(a,b,p){
+  const mx=(a.x+b.x)/2,my=(a.y+b.y)/2,cx=W/2,cy=H/2;
+  const qx=mx+(cx-mx)*.22,qy=my+(cy-my)*.22,u=1-p;
+  return{x:u*u*a.x+2*u*p*qx+p*p*b.x, y:u*u*a.y+2*u*p*qy+p*p*b.y};
+}
+function draw(dt){
+  ctx.clearRect(0,0,W,H);
+
+  // idle links
+  ctx.lineWidth=.5;
+  for(let i=0;i<5;i++)for(let j=i+1;j<5;j++){
+    ctx.strokeStyle=blocked(i,j)?'rgba(194,84,56,.10)':'rgba(90,100,125,.11)';
+    ctx.beginPath();ctx.moveTo(N[i].x,N[i].y);
+    const m=bez(N[i],N[j],.5);ctx.quadraticCurveTo(m.x,m.y,N[j].x,N[j].y);ctx.stroke();
+  }
+
+  // partition rift
+  if(partition){
+    const g1=N.filter(n=>partition.includes(n.id)),g2=N.filter(n=>!partition.includes(n.id));
+    const c1={x:avg(g1,'x'),y:avg(g1,'y')},c2={x:avg(g2,'x'),y:avg(g2,'y')};
+    const mx=(c1.x+c2.x)/2,my=(c1.y+c2.y)/2,ang=Math.atan2(c2.y-c1.y,c2.x-c1.x)+Math.PI/2;
+    ctx.save();ctx.translate(mx,my);ctx.rotate(ang);
+    ctx.strokeStyle='rgba(194,84,56,.5)';ctx.lineWidth=1;
+    ctx.setLineDash([9,7]);ctx.lineDashOffset=-tick*.55;
+    ctx.beginPath();
+    for(let y=-H;y<H;y+=9)ctx.lineTo(Math.sin(y*.05+tick*.02)*4,y);
+    ctx.stroke();ctx.setLineDash([]);
+    const gr=ctx.createLinearGradient(-26,0,26,0);
+    gr.addColorStop(0,'rgba(194,84,56,0)');gr.addColorStop(.5,'rgba(194,84,56,.10)');
+    gr.addColorStop(1,'rgba(194,84,56,0)');
+    ctx.fillStyle=gr;ctx.fillRect(-26,-H,52,H*2);ctx.restore();
+  }
+
+  // ripples
+  ctx.globalCompositeOperation='lighter';
+  ripples=ripples.filter(r=>{
+    r.r+=dt*.10;r.a-=dt*.0016;if(r.a<=0)return false;
+    ctx.strokeStyle=`rgba(${r.c},${r.a})`;ctx.lineWidth=1;
+    ctx.beginPath();ctx.arc(r.x,r.y,r.r,0,7);ctx.stroke();return true;
+  });
+
+  // messages
+  msgs=msgs.filter(m=>{
+    m.p+=m.sp*dt*.06;
+    if(m.dropped&&m.p>=m.cutAt){
+      for(let k=0;k<5;k++){const q=bez(N[m.from],N[m.to],m.cutAt);
+        ripples.push({x:q.x+(Math.random()-.5)*8,y:q.y+(Math.random()-.5)*8,r:1,a:.3,c:'194,84,56'})}
+      return false;
+    }
+    if(m.p>=1){N[m.to].glow=1;return false}
+    const q=bez(N[m.from],N[m.to],m.p);
+    for(let k=1;k<7;k++){
+      const tp=Math.max(0,m.p-k*.026),s=bez(N[m.from],N[m.to],tp);
+      ctx.fillStyle=`rgba(${m.type==='RV'?'155,140,240':'229,162,60'},${(.30-k*.04)})`;
+      ctx.beginPath();ctx.arc(s.x,s.y,2.4-k*.28,0,7);ctx.fill();
+    }
+    ctx.fillStyle=m.type==='RV'?'rgba(180,168,255,.95)':'rgba(245,196,120,.95)';
+    ctx.beginPath();ctx.arc(q.x,q.y,2.7,0,7);ctx.fill();
+    return true;
+  });
+  ctx.globalCompositeOperation='source-over';
+
+  // nodes
+  N.forEach(n=>{
+    n.pulse=Math.max(0,n.pulse-dt*.0022);n.glow=Math.max(0,n.glow-dt*.003);
+    const base=n.state==='leader'?[229,162,60]:n.state==='candidate'?[155,140,240]:[88,98,121];
+    const R=22, live=n.alive;
+    if(live&&(n.pulse>0||n.state==='leader')){
+      const gl=ctx.createRadialGradient(n.x,n.y,R*.5,n.x,n.y,R*3.2);
+      gl.addColorStop(0,`rgba(${base},${.16*(n.state==='leader'?.7:0)+n.pulse*.28})`);
+      gl.addColorStop(1,`rgba(${base},0)`);
+      ctx.fillStyle=gl;ctx.beginPath();ctx.arc(n.x,n.y,R*3.2,0,7);ctx.fill();
+    }
+    ctx.fillStyle=live?'#0F131C':'#0A0C12';
+    ctx.beginPath();ctx.arc(n.x,n.y,R,0,7);ctx.fill();
+    ctx.strokeStyle=live?`rgba(${base},${.55+n.pulse*.45+n.glow*.3})`:'rgba(60,68,88,.5)';
+    ctx.lineWidth=live?1.2:1;ctx.beginPath();ctx.arc(n.x,n.y,R,0,7);ctx.stroke();
+    if(n.state==='leader'&&live){
+      ctx.strokeStyle=`rgba(${base},.22)`;ctx.lineWidth=.7;
+      ctx.beginPath();ctx.arc(n.x,n.y,R+7+Math.sin(tick*.03)*1.6,0,7);ctx.stroke();
+    }
+    ctx.fillStyle=live?'#E8E3D6':'#3E4659';
+    ctx.font='500 15px "IBM Plex Mono",monospace';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(n.id,n.x,n.y-1);
+    ctx.font='400 9.5px "IBM Plex Mono",monospace';
+    ctx.fillStyle=live?`rgba(${base},.9)`:'rgba(62,70,89,.9)';
+    ctx.fillText(live?(n.state==='leader'?'LEADER':n.state==='candidate'?'CAND':'t'+n.term):'DOWN',n.x,n.y+R+13);
+  });
+}
+const avg=(a,k)=>a.reduce((s,n)=>s+n[k],0)/a.length;
+
+/* ── loop ───────────────────────────────── */
+let last=performance.now();
+function loop(now){
+  const dt=Math.min(now-last,50);last=now;
+  if(playing){
+    acc+=dt*speed*0.1;tick=Math.round(acc);
+    while(script<TL.length&&acc>=TL[script].at){TL[script].f();script++;paint()}
+    if(tick%Math.round(120/speed)===0)heartbeat();
+  }
+  draw(dt*speed);
+  requestAnimationFrame(loop);
+}
+
+/* ── controls ───────────────────────────── */
+const $=id=>document.getElementById(id);
+$('play').onclick=e=>{playing=!playing;e.target.textContent=playing?'Pause':'Play'};
+$('part').onclick=()=>{
+  partition=partition?null:['A','B'];
+  $('banner').classList.toggle('on',!!partition);
+  phase=partition?'partitioned':'steady';
+  ev(partition?'network partitioned · {A,B} ⁄ {C,D,E}':'partition healed',partition?'warn':'good');paint();
+};
+$('spd').oninput=e=>{speed=+e.target.value;$('spdo').textContent=speed.toFixed(1)+'×'};
+$('lat').oninput=e=>{latency=+e.target.value;$('lato').textContent=latency};
+$('drp').oninput=e=>{drop=+e.target.value;$('drpo').textContent=drop+'%'};
+cv.onclick=e=>{
+  const r=cv.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
+  const n=N.find(n=>Math.hypot(n.x-mx,n.y-my)<26);if(!n)return;
+  n.alive=!n.alive;
+  ev(`<b>${n.id}</b> ${n.alive?'revived · restarts as follower':'killed'}`,n.alive?'good':'warn');
+  if(!n.alive&&n.i===leader){setTimeout(()=>{leader=(leader+1)%5;N[leader].state='leader';
+    N.forEach((x,i)=>{if(i!==leader)x.state='follower'});term++;
+    ev(`<b>${IDS[leader]}</b> elected leader · term ${term}`,'hi');paint()},900)}
+  paint();
+};
+
+resize();paint();requestAnimationFrame(loop);
+</script>
