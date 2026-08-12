@@ -34,8 +34,10 @@ export interface BusConfig {
   readonly duplicateProbability: number
 }
 
-interface InFlight {
+export interface InFlight {
   readonly message: Message
+  /** Tick the message was handed to the network. The UI interpolates from it. */
+  readonly sentAt: number
   readonly deliverAt: number
   /** Send order, used only to break ties between messages due on the same tick. */
   readonly seq: number
@@ -125,7 +127,7 @@ function enqueue(
   const deliverAt = now + prng.nextInt(min, max + 1)
   const seq = bus.seq++
 
-  bus.inFlight.push({ message, deliverAt, seq })
+  bus.inFlight.push({ message, sentAt: now, deliverAt, seq })
   record(tracer, { tick: now, kind, seq, message, deliverAt })
 }
 
@@ -152,7 +154,14 @@ export function collectDue(bus: Bus, now: number, tracer: Tracer): Message[] {
   for (const flight of due) {
     if (!canReach(bus, flight.message.from, flight.message.to)) {
       bus.stats.partitioned += 1
-      record(tracer, { tick: now, kind: 'drop', message: flight.message, reason: 'partition' })
+        record(tracer, {
+        tick: now,
+        kind: 'drop',
+        message: flight.message,
+        reason: 'partition',
+        seq: flight.seq,
+        sentAt: flight.sentAt,
+      })
       continue
     }
     bus.stats.delivered += 1

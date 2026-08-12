@@ -32,6 +32,9 @@ export type TraceEvent =
       readonly kind: 'drop'
       readonly message: Message
       readonly reason: DropReason
+      /** Present when the message had already been enqueued (partition, node-down). */
+      readonly seq?: number
+      readonly sentAt?: number
     }
   | {
       readonly tick: number

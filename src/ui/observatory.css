@@ -1,0 +1,473 @@
+/*
+ * The visual language, from design/reference.html.
+ *
+ * Two motion registers, kept apart. Instrument layer (--ease, 120-200ms) for
+ * everything the running simulation changes. Cinematic layer (--snap, 400ms+)
+ * for exactly four moments: leader elected, commit advances, partition opens,
+ * partition heals. Commit crystallization is the signature — nothing else in
+ * here is allowed to compete with it.
+ */
+
+:root {
+  --void: #090b12;
+  --field: #0c0f17;
+  --panel: #10131c;
+  --rule: #1b2030;
+  --rule-hi: #2a3146;
+  --ink: #e8e3d6;
+  --dim: #8e95a6;
+  --mute: #555d71;
+  --leader: #e5a23c;
+  --cand: #9b8cf0;
+  --follow: #586279;
+  --oxide: #c25438;
+
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --snap: cubic-bezier(0.35, 1.4, 0.5, 1);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--void);
+  color: var(--ink);
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+.mono {
+  font-family: 'IBM Plex Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── header ─────────────────────────────── */
+
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: 20px;
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--rule);
+  background: linear-gradient(180deg, #0e1119, var(--void));
+  flex-shrink: 0;
+}
+.mark {
+  font-family: 'Instrument Serif', serif;
+  font-size: 23px;
+  letter-spacing: 0.01em;
+}
+.mark em {
+  font-style: italic;
+  color: var(--leader);
+}
+.tag {
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+.hstats {
+  margin-left: auto;
+  display: flex;
+  gap: 22px;
+  align-items: baseline;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.stat > span:first-child {
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+.stat > span:last-child {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+.phase {
+  color: var(--leader);
+  transition: color 0.5s var(--ease);
+}
+.phase[data-phase='leaderless'] {
+  color: var(--oxide);
+}
+.phase[data-phase='contested'] {
+  color: var(--cand);
+}
+
+/* ── main ───────────────────────────────── */
+
+.main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  min-height: 0;
+}
+
+.field {
+  position: relative;
+  background: radial-gradient(ellipse 70% 60% at 50% 45%, #111624 0%, var(--field) 60%, var(--void) 100%);
+  border-right: 1px solid var(--rule);
+  min-height: 0;
+}
+.field canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.hint {
+  position: absolute;
+  bottom: 14px;
+  left: 20px;
+  font-size: 10.5px;
+  color: var(--mute);
+  letter-spacing: 0.04em;
+}
+.feedbadge {
+  position: absolute;
+  top: 14px;
+  right: 18px;
+  font-size: 9.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--cand);
+  border: 1px solid rgba(155, 140, 240, 0.4);
+  background: rgba(155, 140, 240, 0.08);
+  padding: 4px 10px;
+  border-radius: 2px;
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--panel);
+}
+.sec {
+  padding: 13px 18px 9px;
+  border-bottom: 1px solid var(--rule);
+  flex-shrink: 0;
+}
+.sec h2 {
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+/* ── ledger ─────────────────────────────── */
+
+.ledger {
+  padding: 12px 18px 16px;
+  border-bottom: 1px solid var(--rule);
+  flex-shrink: 0;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+.rid {
+  width: 52px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--follow);
+  transition:
+    background 0.4s var(--ease),
+    box-shadow 0.4s var(--ease);
+}
+.dot[data-role='leader'] {
+  background: var(--leader);
+  box-shadow: 0 0 9px rgba(229, 162, 60, 0.7);
+}
+.dot[data-role='candidate'] {
+  background: var(--cand);
+  box-shadow: 0 0 9px rgba(155, 140, 240, 0.6);
+}
+.dot[data-role='dead'] {
+  background: #2a3044;
+  box-shadow: none;
+}
+.rid b {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--dim);
+}
+.cells {
+  display: flex;
+  gap: 3px;
+}
+.cell {
+  width: 19px;
+  height: 22px;
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  border: 1px solid var(--rule-hi);
+  color: var(--mute);
+  background: transparent;
+  transition: all 0.5s var(--ease);
+  flex-shrink: 0;
+}
+/* Provisional: visibly unsettled. */
+.cell[data-state='uncommitted'] {
+  border-color: rgba(155, 140, 240, 0.5);
+  color: var(--cand);
+  background: rgba(155, 140, 240, 0.07);
+  animation: breathe 2.1s ease-in-out infinite;
+}
+/* Settled: ink on paper. Not green — permanence is the semantic, not approval. */
+.cell[data-state='committed'] {
+  border-color: transparent;
+  background: var(--ink);
+  color: #0b0e15;
+}
+.cell[data-state='divergent'] {
+  border-color: rgba(194, 84, 56, 0.5);
+  color: var(--oxide);
+  background: rgba(194, 84, 56, 0.08);
+}
+/* The signature. Staggered per row so it reads as a wave down the cluster. */
+.cell.crystallize {
+  animation: crystal 0.55s var(--snap);
+}
+.cell.shatter {
+  animation: shatter 0.4s var(--ease) forwards;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes crystal {
+  0% {
+    transform: scale(1.5);
+    opacity: 0.3;
+  }
+  60% {
+    transform: scale(0.94);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes shatter {
+  to {
+    opacity: 0;
+    transform: scale(0.6) translateY(4px);
+    filter: blur(2px);
+  }
+}
+
+.rowmeta {
+  margin-left: auto;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  color: var(--mute);
+}
+
+/* ── event stream ───────────────────────── */
+
+.stream {
+  flex: 1;
+  overflow: hidden;
+  padding: 6px 18px 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-height: 0;
+}
+.ev {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  line-height: 1.85;
+  color: var(--mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: slide 0.3s var(--ease);
+}
+@keyframes slide {
+  from {
+    opacity: 0;
+    transform: translateX(-5px);
+  }
+}
+.ev b {
+  font-weight: 400;
+  color: var(--dim);
+}
+.ev[data-tone='leader'],
+.ev[data-tone='leader'] b {
+  color: var(--leader);
+}
+.ev[data-tone='warn'],
+.ev[data-tone='warn'] b {
+  color: var(--oxide);
+}
+.ev[data-tone='good'] b,
+.ev[data-tone='good'] {
+  color: var(--ink);
+}
+
+/* ── controls ───────────────────────────── */
+
+.foot {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 11px 22px;
+  border-top: 1px solid var(--rule);
+  background: #0b0e15;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+button {
+  background: transparent;
+  border: 1px solid var(--rule-hi);
+  color: var(--dim);
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 6px 13px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 0.18s var(--ease);
+}
+button:hover:not(:disabled) {
+  border-color: var(--mute);
+  color: var(--ink);
+}
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--leader);
+  outline-offset: 2px;
+}
+.sl {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.sl label {
+  font-size: 9.5px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+.sl output {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  color: var(--dim);
+  min-width: 34px;
+}
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 76px;
+  height: 2px;
+  background: var(--rule-hi);
+  border-radius: 2px;
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--ink);
+  cursor: pointer;
+  transition: transform 0.15s var(--ease);
+}
+input[type='range']::-webkit-slider-thumb:hover {
+  transform: scale(1.25);
+}
+input[type='range']::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ink);
+  cursor: pointer;
+}
+input[type='text'] {
+  background: transparent;
+  border: 1px solid var(--rule-hi);
+  color: var(--dim);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  padding: 5px 8px;
+  border-radius: 2px;
+  width: 84px;
+}
+.spacer {
+  margin-left: auto;
+}
+
+/* Motion off: every state stays legible by colour and fill alone. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .cell[data-state='uncommitted'] {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 900px) {
+  .main {
+    grid-template-columns: 1fr;
+  }
+  .side {
+    display: none;
+  }
+}

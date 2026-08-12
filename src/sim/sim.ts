@@ -1,7 +1,7 @@
 import { step } from '../raft/step'
-import type { Command, Event, Message, NodeId, NodeState } from '../raft/types'
+import type { Command, Event, NodeId, NodeState } from '../raft/types'
 import { collectDue, createBus, heal, partition, send } from './bus'
-import type { Bus, Latency } from './bus'
+import type { Bus, InFlight, Latency } from './bus'
 import { makePrng } from './prng'
 import type { Prng } from './prng'
 import { createTracer, record } from './trace'
@@ -241,7 +241,7 @@ export function submitTo(sim: Sim, id: NodeId, command: Command): void {
   apply(sim, id, { type: 'client-command', command })
 }
 
-/** Messages currently on the wire. For assertions and, later, the visualization. */
-export function inFlight(sim: Sim): Message[] {
-  return sim.bus.inFlight.map((flight) => flight.message)
+/** Messages currently on the wire, with their send and delivery ticks. */
+export function inFlight(sim: Sim): readonly InFlight[] {
+  return sim.bus.inFlight
 }
