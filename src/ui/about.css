@@ -1,0 +1,200 @@
+/*
+ * The reading surface.
+ *
+ * Same palette, same hairlines, same restraint as the instrument — but laid out
+ * for prose rather than for control. Two deliberate departures from the
+ * instrument's typography, both because this page is read rather than operated:
+ *
+ *   - Instrument Serif is used for headings, not only the wordmark. Sanctioned
+ *     for this page specifically; it stays off every control surface.
+ *   - Body is 15px on a 1.75 measure rather than the instrument's 13px. Chrome
+ *     type is glanced at; this is read for two minutes.
+ *
+ * There is no motion here beyond the breathing on the sample uncommitted cell,
+ * which is inherited from the real ledger and carries meaning.
+ */
+
+/*
+ * Scrolls the document, not a nested div. A div with overflow:auto is not
+ * focusable, so Space and PageDown would do nothing on a page whose entire
+ * purpose is to be read.
+ */
+.reader {
+  min-height: 100%;
+  background:
+    radial-gradient(ellipse 60% 50% at 50% 0%, #10141f 0%, var(--void) 70%),
+    var(--void);
+}
+
+.reader-head {
+  display: flex;
+  align-items: baseline;
+  gap: 20px;
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--rule);
+  position: sticky;
+  top: 0;
+  background: linear-gradient(180deg, #0e1119, #0b0e15);
+  z-index: 2;
+}
+.reader-head .mark {
+  text-decoration: none;
+  color: var(--ink);
+}
+.reader-back {
+  margin-left: auto;
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--mute);
+  text-decoration: none;
+  transition: color 0.18s var(--ease);
+}
+.reader-back:hover {
+  color: var(--ink);
+}
+
+/* ── prose ──────────────────────────────── */
+
+.prose {
+  /* ~68 characters: long enough not to feel clipped, short enough to track. */
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 56px 26px 110px;
+}
+
+.prose h1 {
+  font-family: 'Instrument Serif', serif;
+  font-size: 38px;
+  font-weight: 400;
+  line-height: 1.15;
+  letter-spacing: 0.005em;
+  color: var(--ink);
+}
+.prose h2 {
+  font-family: 'Instrument Serif', serif;
+  font-size: 21px;
+  font-weight: 400;
+  color: var(--ink);
+  margin: 44px 0 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--rule);
+}
+
+.prose p {
+  font-size: 15px;
+  line-height: 1.75;
+  color: #c8c6bd;
+  margin-bottom: 15px;
+}
+.prose .standfirst {
+  font-size: 16.5px;
+  line-height: 1.68;
+  color: var(--dim);
+  margin: 16px 0 4px;
+}
+.prose b {
+  font-weight: 500;
+  color: var(--ink);
+}
+.prose em {
+  font-style: italic;
+  color: var(--ink);
+}
+.prose a {
+  color: var(--leader);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(229, 162, 60, 0.35);
+  transition: border-color 0.18s var(--ease);
+}
+.prose a:hover {
+  border-bottom-color: var(--leader);
+}
+
+/* ── legend ─────────────────────────────── */
+
+/*
+ * Built from the instrument's own `.dot` and `.cell` classes rather than
+ * lookalikes, so the key cannot drift away from the thing it explains.
+ */
+.legend {
+  list-style: none;
+  margin: 18px 0 22px;
+  border-left: 1px solid var(--rule-hi);
+  padding-left: 18px;
+}
+.legend li {
+  display: flex;
+  align-items: baseline;
+  gap: 11px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--dim);
+  margin-bottom: 11px;
+}
+.legend li:last-child {
+  margin-bottom: 0;
+}
+.legend .dot {
+  flex-shrink: 0;
+  transform: translateY(-2px);
+}
+.legend .cell {
+  flex-shrink: 0;
+  transform: translateY(4px);
+}
+.legend b {
+  font-weight: 500;
+  color: var(--ink);
+  margin-right: 2px;
+}
+
+.tries {
+  list-style: none;
+  margin: 4px 0 8px;
+}
+.tries li {
+  font-size: 15px;
+  line-height: 1.75;
+  color: #c8c6bd;
+  padding-left: 18px;
+  position: relative;
+  margin-bottom: 7px;
+}
+.tries li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 11px;
+  width: 5px;
+  height: 1px;
+  background: var(--mute);
+}
+
+.footnote {
+  margin-top: 40px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rule);
+  font-size: 13px !important;
+  line-height: 1.7 !important;
+  color: var(--mute) !important;
+}
+
+.return {
+  margin-top: 34px;
+}
+.return a {
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  border-bottom: 0;
+}
+
+@media (max-width: 640px) {
+  .prose {
+    padding: 40px 20px 80px;
+  }
+  .prose h1 {
+    font-size: 31px;
+  }
+}

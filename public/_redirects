@@ -1,0 +1,3 @@
+# SPA fallback so /about resolves on a cold load. Pages serves real files first,
+# so this only catches routes with no matching asset.
+/*    /index.html   200

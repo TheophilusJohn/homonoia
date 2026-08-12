@@ -44,7 +44,6 @@ body {
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
-  overflow: hidden;
 }
 
 .mono {
@@ -56,6 +55,10 @@ body {
   height: 100%;
   display: flex;
   flex-direction: column;
+  /* The instrument fills the viewport and never scrolls. The reading page
+     deliberately does, on the document, so the keyboard and find-in-page work
+     there — which is why this lock lives here and not on body. */
+  overflow: hidden;
 }
 
 /* ── header ─────────────────────────────── */
@@ -84,6 +87,18 @@ body {
   text-transform: uppercase;
   color: var(--mute);
 }
+.head-link {
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition:
+    color 0.18s var(--ease),
+    border-color 0.18s var(--ease);
+}
+.head-link:hover {
+  color: var(--dim);
+  border-bottom-color: var(--rule-hi);
+}
+
 .hstats {
   margin-left: auto;
   display: flex;
@@ -425,10 +440,14 @@ button:disabled {
   opacity: 0.4;
   cursor: default;
 }
+/* Every focusable thing, not just controls — links were falling through to the
+   browser's default ring. */
 button:focus-visible,
-input:focus-visible {
+input:focus-visible,
+a:focus-visible {
   outline: 2px solid var(--leader);
   outline-offset: 2px;
+  border-radius: 2px;
 }
 .sl {
   display: flex;

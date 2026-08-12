@@ -9,6 +9,7 @@ import { EventStream } from './EventStream'
 import { Ledger } from './Ledger'
 import { createMockFeed, MOCK_CYCLE_TICKS } from './mockFeed'
 import { NodeField } from './NodeField'
+import { hrefFor, navigate, shouldIntercept } from './router'
 import { createSimFeed } from './simFeed'
 import type { SimFeed } from './simFeed'
 import type { Feed, ViewState } from './viewModel'
@@ -257,6 +258,17 @@ export function Observatory() {
           Homo<em>noia</em>
         </div>
         <div className="tag">Raft consensus · observatory</div>
+        <a
+          className="tag head-link"
+          href={hrefFor('/about')}
+          onClick={(event) => {
+            if (!shouldIntercept(event)) return
+            event.preventDefault()
+            navigate('/about')
+          }}
+        >
+          What is this?
+        </a>
 
         <div className="hstats">
           <div className="stat">
