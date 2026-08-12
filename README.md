@@ -263,6 +263,7 @@ npm install
 npm run dev      # observatory at localhost:5173
 npm test
 npm run fuzz
+npm run deploy   # build + publish to Cloudflare Pages (needs `wrangler login` once)
 ```
 
 **Controls.** Play/pause, step one tick, submit a command, speed, latency, drop
