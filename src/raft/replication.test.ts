@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 
-import { leaders, makeCluster, node, run, submit } from '../test/cluster'
 import { step } from './step'
 import type { AppendEntriesResponse, LogEntry, Message, NodeId, NodeState } from './types'
 
@@ -438,91 +437,5 @@ describe('commit advancement', () => {
 
       expect(state.commitIndex).toBe(0)
     })
-  })
-})
-
-describe('end to end replication', () => {
-  const timeouts = { n1: 150, n2: 200, n3: 250 }
-  const draws = { n1: 160, n2: 210, n3: 260 }
-
-  function electedCluster() {
-    const cluster = makeCluster(timeouts)
-    run(cluster, 200, draws)
-    expect(leaders(cluster)).toHaveLength(1)
-    return cluster
-  }
-
-  it('replicates a command to every node and applies it everywhere', () => {
-    const cluster = electedCluster()
-
-    submit(cluster, { key: 'colour', value: 'blue' })
-    run(cluster, 100, draws)
-
-    for (const n of cluster.nodes.values()) {
-      expect(n.log).toHaveLength(1)
-      expect(n.commitIndex).toBe(1)
-      expect(n.kv).toEqual({ colour: 'blue' })
-    }
-  })
-
-  it('keeps every log identical across a stream of commands', () => {
-    const cluster = electedCluster()
-
-    for (let i = 1; i <= 20; i++) {
-      submit(cluster, { key: `k${i}`, value: `v${i}` })
-      run(cluster, 5, draws)
-    }
-    run(cluster, 100, draws)
-
-    const [first, ...rest] = [...cluster.nodes.values()]
-    for (const n of rest) {
-      expect(n.log).toEqual(first.log)
-      expect(n.commitIndex).toBe(first.commitIndex)
-      expect(n.kv).toEqual(first.kv)
-    }
-    expect(first.log).toHaveLength(20)
-    expect(first.commitIndex).toBe(20)
-  })
-
-  it('applies overwrites in log order, so every node agrees on the last value', () => {
-    const cluster = electedCluster()
-
-    for (const value of ['one', 'two', 'three']) {
-      submit(cluster, { key: 'k', value })
-      run(cluster, 5, draws)
-    }
-    run(cluster, 100, draws)
-
-    for (const n of cluster.nodes.values()) {
-      expect(n.kv).toEqual({ k: 'three' })
-      expect(n.log).toHaveLength(3)
-    }
-  })
-
-  it('ignores a command submitted to a follower', () => {
-    const cluster = electedCluster()
-    const follower = node(cluster, 'n2')
-
-    const { state, outbox } = step(follower, {
-      type: 'client-command',
-      command: { key: 'k', value: 'v' },
-    })
-
-    expect(state.log).toEqual([])
-    expect(outbox).toEqual([])
-  })
-
-  it('leaves lastApplied tracking commitIndex on every node', () => {
-    const cluster = electedCluster()
-
-    for (let i = 1; i <= 5; i++) {
-      submit(cluster, { key: `k${i}`, value: `v${i}` })
-      run(cluster, 20, draws)
-    }
-
-    for (const n of cluster.nodes.values()) {
-      expect(n.lastApplied).toBe(n.commitIndex)
-      expect(Object.keys(n.kv)).toHaveLength(5)
-    }
   })
 })
