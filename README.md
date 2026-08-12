@@ -8,6 +8,16 @@ Five nodes on a ring. Cut the network, kill the leader, watch a minority stall a
 then converge. The visualization exists to demonstrate a working consensus
 implementation — not the other way around.
 
+**[homonoia.dev](https://homonoia.dev)** — live.
+**[homonoia.dev/about](https://homonoia.dev/about)** — two minutes, no prior
+knowledge, written for someone who has never heard of Raft.
+
+If you read one thing here, make it
+**[What 5,000 seeds could not find](#what-5000-seeds-could-not-find)**: the
+harness that asserts all five safety properties across 15 million ticks is
+completely blind to the subtlest rule in the algorithm, and that is a more useful
+result than the green sweep next to it.
+
 ---
 
 ## What Raft is
@@ -77,6 +87,13 @@ backwards: seeking to an earlier tick rebuilds the sim from its seed and replays
 The visualization is a projection of this, not a reimplementation. `src/ui/`
 consumes a `ViewState` snapshot; both the real simulation and a scripted mock feed
 satisfy the same interface.
+
+A WebGL node field lives on the [`webgl`](../../tree/webgl) branch behind
+`?field=webgl` — three.js, refractive uncommitted nodes, the leader as an actual
+light source, bloomed message particles, the rift as a volume. It implements the
+same `FieldRenderer` interface and consumes the same `ViewState`, so the two are
+interchangeable. The 2D canvas renderer is what ships: at five nodes and a few
+dozen messages it reads more clearly, and it costs 220kB against three.js's 550.
 
 ---
 
@@ -148,6 +165,10 @@ Latest sweep, **1000 seeds × 3000 ticks, 0 failures**, ~10s:
 
 Zero seeds committed nothing; zero seeds had ≤1 leader change.
 
+That table is worth exactly as much as the schedule's reach, and no more — read
+[What 5,000 seeds could not find](#what-5000-seeds-could-not-find) before
+concluding anything from it.
+
 The harness prints a `SCHEDULE NOT AGGRESSIVE ENOUGH` warning against six
 thresholds when a sweep stops stressing the cluster, so a green run cannot quietly
 become a vacuous one. It fired during development: an early schedule produced 1.7
@@ -155,32 +176,6 @@ leader changes per seed, because kills hit random nodes (mostly followers) and a
 150–300 tick election timeout meant every leader loss cost ~200 idle ticks. Fixed
 by biasing kills at the leader and tightening the timeout to 50–100 ticks — 3–7×
 the heartbeat interval, the ratio the paper uses.
-
-### Tests that fail when the rule is removed
-
-A test for a safety rule is worth nothing if it passes with the rule deleted. Each
-of these was verified by reintroducing the bug:
-
-| Rule removed | What fails |
-|---|---|
-| Current-term commit restriction | 2 unit tests + the scripted Figure 8 scenario, deterministically at tick 1529 |
-| Truncate only on a genuine term conflict | The delayed-duplicate test, on the committed-prefix invariant at tick 633 |
-| Up-to-date check comparing index before term | 8 of 200 fuzz seeds, as Leader Completeness |
-
-**The Figure 8 finding.** With the current-term restriction deleted, the random
-fuzz sweep caught it in roughly **1 seed in 1000** — a lottery, not a guard. It
-needs four things to coincide: an entry stranded on a minority, a competing
-higher-term entry at the same index, the node holding that entry unreachable while
-the old one reaches a majority, and reachable again afterwards. An untargeted
-adversary almost never arranges all four, and turning up the chaos made detection
-*worse*, because the cluster committed less. Adding a mid-replication leader crash
-raised leader churn but did not improve detection.
-
-So Figure 8 is **scripted end to end** in
-[`src/test/scenarios.test.ts`](src/test/scenarios.test.ts) instead, where it fails
-deterministically with the bug present. Random fuzzing is good at the broad
-classes and bad at this one; saying so is more useful than a green sweep that
-implies otherwise.
 
 ### Everything else
 
@@ -194,6 +189,55 @@ Named scenarios include: leader killed mid-term with committed entries preserved
 duplicated messages not double-appending or manufacturing a majority, a
 long-delayed duplicate not truncating entries a follower has moved past, Figure 8,
 and the partition demo below.
+
+---
+
+## What 5,000 seeds could not find
+
+The most useful result in this project is a negative one.
+
+A test for a safety rule is worth nothing if it still passes with the rule
+deleted, so each of these rules was removed and the suite re-run. Two of the three
+bugs are caught easily. The third is not caught at all.
+
+| Rule deleted | Fuzz sweep finds it | Deterministic tests find it |
+|---|---|---|
+| Up-to-date check comparing term before index | **8 of 200 seeds** (4%), as Leader Completeness | — |
+| Truncate only on a genuine term conflict | — | delayed-duplicate scenario, State Machine Safety at tick 633 |
+| **Current-term commit restriction** (Figure 8) | **0 of 5,000 seeds** | scripted Figure 8 at tick 1529, plus 2 unit tests |
+
+That last run, measured: 5,000 seeds × 3,000 ticks is 15 million ticks, during
+which the adversary formed **37,552 partitions**, performed **64,164 kills**,
+forced **41,879 leader changes**, and committed **447,766 entries** across
+9,974,273 messages — of which 925,003 were discarded by a partition and 484,163
+were duplicated. The harness checks all five safety properties after every one of
+those 15 million ticks. It never once notices that the rule protecting Raft's most
+famous corner case has been deleted.
+
+**Why it cannot see it.** Figure 8 needs four things to line up at once: an entry
+stranded on a minority, a competing higher-term entry at the same index, the node
+holding that competing entry unreachable while the stranded one reaches a
+majority, and reachable again afterwards. A schedule that picks its failures at
+random essentially never arranges all four in the right order.
+
+**Turning up the chaos makes it worse, not better.** Higher drop rates and more
+frequent partitions were tried; detection fell, because a cluster under constant
+disruption commits less, and an entry has to be *committed* before losing it can
+be observed. Adding a mid-replication leader crash — targeting the exact window
+where an entry sits on a minority — raised leader churn substantially and still
+found nothing.
+
+So the rule is guarded by a scripted scenario instead, in
+[`src/test/scenarios.test.ts`](src/test/scenarios.test.ts): partition the leader
+onto a minority, strand an entry, let the majority elect a rival that appends a
+competing entry at the same index, isolate it, reunite the rest. That fails
+deterministically, on the tick it happens, every run.
+
+**What to take from this.** Random fuzzing is very good at broad classes of bug
+and structurally blind to narrow ones, and it cannot tell you which kind it is
+looking at. A green sweep is evidence about the failures the schedule can reach
+and no evidence whatsoever about the ones it cannot. The only way to know which
+is which is to break the code on purpose and see whether anything goes red.
 
 ---
 
