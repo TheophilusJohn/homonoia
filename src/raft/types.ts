@@ -40,8 +40,17 @@ export interface NodeState {
 
   readonly commitIndex: number
   readonly lastApplied: number
-  /** Virtual-clock time at which this node starts an election. */
-  readonly electionDeadline: number
+
+  /**
+   * Ticks since this node last heard from a valid leader or granted a vote.
+   * Counting elapsed ticks rather than storing an absolute deadline is what
+   * lets a message delivery reset the timer without carrying a clock value.
+   */
+  readonly electionElapsed: number
+  /** Election fires when `electionElapsed` reaches this. Redrawn per election by the driver's PRNG. */
+  readonly electionTimeout: number
+  /** Ticks since this leader last sent heartbeats. Meaningless off the leader. */
+  readonly heartbeatElapsed: number
 
   // --- Volatile state, candidates ---
 
@@ -108,9 +117,11 @@ export interface Message {
  * Time entering the core. `now` is the driver's virtual clock in tick units.
  *
  * `randomElectionTimeout` is a fresh draw from the driver's seeded PRNG, offered
- * on every tick and consumed only if the node resets its election timer this
- * tick. This is how randomized election timeouts reach a core that is forbidden
- * from generating randomness of its own.
+ * on every tick and consumed only when the node actually starts an election.
+ * This is how randomized election timeouts reach a core that is forbidden from
+ * generating randomness of its own. Other resets of the election timer (a
+ * heartbeat arriving, a vote being granted) only zero `electionElapsed` and keep
+ * the current threshold, so they need no draw and no clock.
  */
 export interface TickEvent {
   readonly type: 'tick'

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { step } from './step'
-import type { Message, NodeId, NodeState } from './types'
+import type { LogEntry, Message, NodeId, NodeState } from './types'
 
 const SELF: NodeId = 'n1'
 const PEERS: NodeId[] = ['n2', 'n3', 'n4', 'n5']
@@ -16,7 +16,9 @@ function node(overrides: Partial<NodeState> = {}): NodeState {
     log: [],
     commitIndex: 0,
     lastApplied: 0,
-    electionDeadline: 100,
+    electionElapsed: 0,
+    electionTimeout: 150,
+    heartbeatElapsed: 0,
     votesGranted: [],
     nextIndex: {},
     matchIndex: {},
@@ -72,10 +74,13 @@ describe('higher term forces a step down', () => {
     expect(state.role).toBe('follower')
   })
 
+  // Observed through AppendEntries, which never sets votedFor. A higher-term
+  // RequestVote also clears the vote, but then immediately grants a new one in
+  // the new term, which would hide the clearing.
   it('clears a vote cast in the older term', () => {
     const before = node({ currentTerm: 5, votedFor: 'n3' })
 
-    const { state } = deliver(before, voteReq(6, 'n4'))
+    const { state } = deliver(before, appendReq(6, 'n4'))
 
     expect(state.currentTerm).toBe(6)
     expect(state.votedFor).toBeNull()
@@ -208,6 +213,88 @@ describe('equal term is not a step down', () => {
 
     expect(state.currentTerm).toBe(5)
     expect(state.votedFor).toBe('n3')
+  })
+})
+
+// Figure 2, RequestVote receiver 2 / §5.4.1.
+describe('granting a vote', () => {
+  function voteReqWithLog(term: number, lastLogTerm: number, lastLogIndex: number): Message {
+    return {
+      from: 'n2',
+      to: SELF,
+      rpc: { type: 'request-vote-req', term, candidateId: 'n2', lastLogIndex, lastLogTerm },
+    }
+  }
+
+  function granted(result: { outbox: Message[] }): boolean {
+    const rpc = result.outbox[0].rpc
+    if (rpc.type !== 'request-vote-res') throw new Error(`expected a vote response, got ${rpc.type}`)
+    return rpc.voteGranted
+  }
+
+  const log: LogEntry[] = [
+    { term: 1, command: 'a' },
+    { term: 4, command: 'b' },
+    { term: 4, command: 'c' },
+  ]
+
+  it('grants when the candidate log is identical', () => {
+    const result = deliver(node({ currentTerm: 4, log }), voteReqWithLog(5, 4, 3))
+
+    expect(granted(result)).toBe(true)
+    expect(result.state.votedFor).toBe('n2')
+  })
+
+  it('grants when the candidate has a longer log at the same term', () => {
+    expect(granted(deliver(node({ currentTerm: 4, log }), voteReqWithLog(5, 4, 9)))).toBe(true)
+  })
+
+  it('denies a shorter log at the same term', () => {
+    expect(granted(deliver(node({ currentTerm: 4, log }), voteReqWithLog(5, 4, 2)))).toBe(false)
+  })
+
+  it('grants a shorter log that ends in a higher term', () => {
+    // Term dominates: one entry at term 9 beats three ending at term 4.
+    expect(granted(deliver(node({ currentTerm: 4, log }), voteReqWithLog(5, 9, 1)))).toBe(true)
+  })
+
+  // The wrong-order regression. A node partitioned away under an old leader
+  // accumulates uncommitted entries and ends up holding the longest log in the
+  // cluster while its last term is stale. Comparing index before term — or
+  // comparing length at all — hands it the election, and it then overwrites
+  // entries a later term already committed and acknowledged to a client.
+  it('denies a longer log whose last term is stale', () => {
+    const result = deliver(node({ currentTerm: 4, log }), voteReqWithLog(5, 2, 10))
+
+    expect(granted(result)).toBe(false)
+    expect(result.state.votedFor).toBeNull()
+  })
+
+  it('denies a second candidate once the vote is spent in this term', () => {
+    const voted = node({ currentTerm: 5, votedFor: 'n3', log })
+
+    expect(granted(deliver(voted, voteReqWithLog(5, 4, 3)))).toBe(false)
+  })
+
+  it('re-grants to the candidate it already voted for, so a duplicate is harmless', () => {
+    const voted = node({ currentTerm: 5, votedFor: 'n2', log })
+
+    expect(granted(deliver(voted, voteReqWithLog(5, 4, 3)))).toBe(true)
+  })
+
+  // Same term throughout, so the only thing that can touch the timer is the
+  // vote itself. (A *higher*-term request resets the timer either way, because
+  // stepping down to a new term resets it — a separate rule.)
+  it('resets the election timer when it grants, not when it denies', () => {
+    const waiting = node({ currentTerm: 5, log, electionElapsed: 140 })
+
+    expect(deliver(waiting, voteReqWithLog(5, 4, 3)).state.electionElapsed).toBe(0)
+    expect(deliver(waiting, voteReqWithLog(5, 2, 10)).state.electionElapsed).toBe(140)
+  })
+
+  it('treats an empty log as beatable by anything, and equal to another empty log', () => {
+    expect(granted(deliver(node({ currentTerm: 0, log: [] }), voteReqWithLog(1, 0, 0)))).toBe(true)
+    expect(granted(deliver(node({ currentTerm: 0, log: [] }), voteReqWithLog(1, 3, 7)))).toBe(true)
   })
 })
 
