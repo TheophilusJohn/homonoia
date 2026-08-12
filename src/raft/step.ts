@@ -1,5 +1,7 @@
-import { entryAt, lastLogIndex, lastLogTerm } from './log'
+import { entriesFrom, entryAt, lastLogIndex, lastLogTerm, truncateBefore } from './log'
 import type {
+  AppendEntriesRequest,
+  Command,
   Event,
   LogEntry,
   Message,
@@ -25,9 +27,9 @@ export const HEARTBEAT_INTERVAL = 15
  * randomness, input never mutated. The driver routes `outbox` and decides when
  * the next event arrives.
  *
- * Milestone 2 implements the term rules and leader election. Log replication
- * (AppendEntries receiver clauses 2-5, nextIndex/matchIndex advancement, commit)
- * is milestone 3 and is stubbed.
+ * Milestone 3 completes term handling, leader election and log replication.
+ * Snapshots, membership changes and client sessions are deliberately out of
+ * scope.
  */
 export function step(state: NodeState, event: Event): StepResult {
   switch (event.type) {
@@ -35,8 +37,7 @@ export function step(state: NodeState, event: Event): StepResult {
       return tick(state, event)
 
     case 'client-command':
-      // Milestone 3: a leader appends to its log and replicates.
-      return { state, outbox: [] }
+      return clientCommand(state, event.command)
 
     case 'deliver':
       return deliver(state, event.message)
@@ -54,7 +55,7 @@ function tick(state: NodeState, event: TickEvent): StepResult {
       return { state: { ...state, heartbeatElapsed }, outbox: [] }
     }
     const beating: NodeState = { ...state, heartbeatElapsed: 0 }
-    return { state: beating, outbox: heartbeats(beating) }
+    return { state: beating, outbox: replicate(beating) }
   }
 
   // Figure 2, Followers: "If election timeout elapses without receiving
@@ -67,48 +68,25 @@ function tick(state: NodeState, event: TickEvent): StepResult {
   return startElection({ ...state, electionElapsed }, event.randomElectionTimeout)
 }
 
+// --- Clients ---
+
 /**
- * Figure 2, Candidates: "On conversion to candidate, start election:
- * increment currentTerm, vote for self, reset election timer, send RequestVote
- * RPCs to all other servers."
+ * Figure 2, Leaders: "If command received from client: append entry to local
+ * log, respond after entry applied to state machine."
  *
- * The new timeout is the driver's fresh PRNG draw. Randomizing it here is the
- * entire mechanism by which split votes resolve: identical timeouts would make
- * the same nodes contend again at the same instant, forever.
+ * Only a leader may append. A follower silently ignores the command; real
+ * clients are redirected to the leader, and client session handling is out of
+ * scope for this project.
  */
-function startElection(state: NodeState, randomElectionTimeout: number): StepResult {
-  const term = state.currentTerm + 1
+function clientCommand(state: NodeState, command: Command): StepResult {
+  if (state.role !== 'leader') return { state, outbox: [] }
 
-  const candidate: NodeState = {
-    ...state,
-    role: 'candidate',
-    currentTerm: term,
-    votedFor: state.id,
-    votesGranted: [state.id],
-    electionElapsed: 0,
-    electionTimeout: randomElectionTimeout,
-    nextIndex: {},
-    matchIndex: {},
-  }
+  const entry: LogEntry = { term: state.currentTerm, command }
+  const leader: NodeState = { ...state, log: [...state.log, entry] }
 
-  // A single-node cluster is its own majority and wins immediately.
-  if (candidate.votesGranted.length >= majority(candidate)) {
-    return becomeLeader(candidate)
-  }
-
-  const outbox: Message[] = candidate.peers.map((peer) => ({
-    from: candidate.id,
-    to: peer,
-    rpc: {
-      type: 'request-vote-req',
-      term,
-      candidateId: candidate.id,
-      lastLogIndex: lastLogIndex(candidate.log),
-      lastLogTerm: lastLogTerm(candidate.log),
-    },
-  }))
-
-  return { state: candidate, outbox }
+  // Advancing here only matters for a single-node cluster, which is its own
+  // majority; with peers this is a no-op until responses arrive.
+  return { state: applyCommitted(advanceCommit(leader)), outbox: replicate(leader) }
 }
 
 // --- Messages ---
@@ -186,39 +164,131 @@ function deliver(state: NodeState, message: Message): StepResult {
       return { state: counted, outbox: [] }
     }
 
-    case 'append-entries-req': {
-      // Figure 2, Candidates: "If AppendEntries RPC received from new leader:
-      // convert to follower." Reaching here means the term is equal to ours —
-      // higher was handled above, lower was rejected — so the sender is the
-      // legitimate leader of this term and the election timer resets.
-      const follower: NodeState = {
-        ...current,
-        role: 'follower',
-        electionElapsed: 0,
-        votesGranted: [],
+    case 'append-entries-req':
+      return appendEntries(current, message.from, rpc)
+
+    case 'append-entries-res': {
+      // A higher term already demoted us above, so reaching here as a
+      // non-leader means this is a straggler from a term we have left.
+      if (current.role !== 'leader') return { state: current, outbox: [] }
+
+      if (rpc.success) {
+        // Figure 2, Leaders: "If successful: update nextIndex and matchIndex
+        // for follower." matchIndex only ever moves forward — responses can
+        // arrive out of order, and the commit calculation reads matchIndex, so
+        // letting a stale response drag it backwards would un-commit entries.
+        const matched = Math.max(current.matchIndex[message.from] ?? 0, rpc.matchIndex)
+        const leader: NodeState = {
+          ...current,
+          matchIndex: { ...current.matchIndex, [message.from]: matched },
+          nextIndex: { ...current.nextIndex, [message.from]: matched + 1 },
+        }
+        return { state: applyCommitted(advanceCommit(leader)), outbox: [] }
       }
 
-      // Milestone 3: AppendEntries receiver clauses 2-5 (consistency check,
-      // conflict truncation, append, commit advance). Until replication exists
-      // every log is empty and prevLogIndex is always 0, so the consistency
-      // check this replaces would pass unconditionally anyway.
-      return {
-        state: follower,
-        outbox: [
-          {
-            from: follower.id,
-            to: message.from,
-            rpc: { type: 'append-entries-res', term: follower.currentTerm, success: true },
-          },
-        ],
+      // Figure 2, Leaders: "If AppendEntries fails because of log
+      // inconsistency: decrement nextIndex and retry."
+      //
+      // This is the *other* reason a follower says false, and the two must not
+      // be confused. A rejection carrying a higher term means we are no longer
+      // leader and must step down — handled above, before this point, so any
+      // failure still reaching here is at our own term and is therefore a log
+      // inconsistency. Walking nextIndex back one index at a time converges on
+      // the last entry the follower agrees with.
+      const walked = Math.max(1, nextIndexFor(current, message.from) - 1)
+      const leader: NodeState = {
+        ...current,
+        nextIndex: { ...current.nextIndex, [message.from]: walked },
       }
+      return { state: leader, outbox: [appendEntriesTo(leader, message.from)] }
+    }
+  }
+}
+
+/**
+ * AppendEntries receiver implementation, Figure 2 clauses 2-5.
+ *
+ * Clause 1 (stale term) is handled by the caller. There is exactly one path in
+ * this function that reports success, and it is downstream of the clause 2
+ * consistency check.
+ */
+function appendEntries(state: NodeState, from: NodeId, rpc: AppendEntriesRequest): StepResult {
+  // Figure 2, Candidates: "If AppendEntries RPC received from new leader:
+  // convert to follower." The term is equal to ours by this point, so the
+  // sender is the legitimate leader of this term and the election timer resets.
+  const follower: NodeState = {
+    ...state,
+    role: 'follower',
+    electionElapsed: 0,
+    votesGranted: [],
+  }
+
+  // Clause 2: "Reply false if log doesn't contain an entry at prevLogIndex
+  // whose term matches prevLogTerm." prevLogIndex 0 is the empty-log base case
+  // and always matches. This is the induction step of Log Matching: agreeing on
+  // the entry before the new ones means agreeing on every entry before that.
+  const prev = entryAt(follower.log, rpc.prevLogIndex)
+  if (rpc.prevLogIndex > 0 && (prev === undefined || prev.term !== rpc.prevLogTerm)) {
+    return { state: follower, outbox: [appendReply(follower, from, false, 0)] }
+  }
+
+  const log = mergeEntries(follower.log, rpc.prevLogIndex, rpc.entries)
+
+  // Clause 5: "If leaderCommit > commitIndex, set commitIndex =
+  // min(leaderCommit, index of last new entry)."
+  //
+  // The min matters: a leader's commitIndex may cover entries this message did
+  // not carry, and committing an index we do not hold would apply an entry that
+  // does not exist. The extra max() guards a delayed message whose last new
+  // entry sits below what we have already committed — commitIndex must never
+  // move backwards.
+  const lastNewIndex = rpc.prevLogIndex + rpc.entries.length
+  const commitIndex =
+    rpc.leaderCommit > follower.commitIndex
+      ? Math.max(follower.commitIndex, Math.min(rpc.leaderCommit, lastNewIndex))
+      : follower.commitIndex
+
+  const next = applyCommitted({ ...follower, log, commitIndex })
+  return { state: next, outbox: [appendReply(next, from, true, lastNewIndex)] }
+}
+
+/**
+ * Figure 2 clauses 3 and 4: truncate on conflict, then append what is new.
+ *
+ * The truncation is deliberately not applied to the whole suffix up front. A
+ * delayed or duplicated AppendEntries carries entries the follower already has;
+ * blindly deleting from `prevLogIndex + 1` and re-appending would, for the
+ * window between the two, discard entries the leader still counts as
+ * replicated — and if the leader had already committed them on the strength of
+ * that matchIndex, a follower could be asked to vote on a log missing committed
+ * entries. So an existing entry is removed only when the term at that index
+ * genuinely differs; matching entries are left exactly where they are.
+ */
+function mergeEntries(
+  log: readonly LogEntry[],
+  prevLogIndex: number,
+  entries: readonly LogEntry[],
+): readonly LogEntry[] {
+  for (let offset = 0; offset < entries.length; offset++) {
+    const index = prevLogIndex + 1 + offset
+    const existing = entryAt(log, index)
+
+    // Clause 4: past the end of our log — everything from here is new.
+    if (existing === undefined) {
+      return [...log, ...entries.slice(offset)]
     }
 
-    case 'append-entries-res':
-      // Milestone 3: nextIndex / matchIndex update and commit advance. Nothing
-      // to track until entries are actually being replicated.
-      return { state: current, outbox: [] }
+    // Clause 3: a real conflict. Delete this entry and every entry that
+    // follows it, then take the leader's version.
+    if (existing.term !== entries[offset].term) {
+      return [...truncateBefore(log, index), ...entries.slice(offset)]
+    }
+
+    // Same index and same term: by Log Matching these are the same entry.
+    // Leave it alone.
   }
+
+  return log
 }
 
 // --- Transitions ---
@@ -232,7 +302,9 @@ function deliver(state: NodeState, message: Message): StepResult {
  * dropped for the same reason: it belonged to the term being left behind.
  *
  * The election timer resets too, so a demoted leader does not immediately time
- * out and contest the term it just conceded.
+ * out and contest the term it just conceded. The log, commitIndex, lastApplied
+ * and kv all survive: nothing about a term change invalidates what was already
+ * committed.
  */
 function stepDown(state: NodeState, term: number): NodeState {
   return {
@@ -248,9 +320,58 @@ function stepDown(state: NodeState, term: number): NodeState {
 }
 
 /**
+ * Figure 2, Candidates: "On conversion to candidate, start election:
+ * increment currentTerm, vote for self, reset election timer, send RequestVote
+ * RPCs to all other servers."
+ *
+ * The new timeout is the driver's fresh PRNG draw. Randomizing it here is the
+ * entire mechanism by which split votes resolve: identical timeouts would make
+ * the same nodes contend again at the same instant, forever.
+ */
+function startElection(state: NodeState, randomElectionTimeout: number): StepResult {
+  const term = state.currentTerm + 1
+
+  const candidate: NodeState = {
+    ...state,
+    role: 'candidate',
+    currentTerm: term,
+    votedFor: state.id,
+    votesGranted: [state.id],
+    electionElapsed: 0,
+    electionTimeout: randomElectionTimeout,
+    nextIndex: {},
+    matchIndex: {},
+  }
+
+  // A single-node cluster is its own majority and wins immediately.
+  if (candidate.votesGranted.length >= majority(candidate)) {
+    return becomeLeader(candidate)
+  }
+
+  const outbox: Message[] = candidate.peers.map((peer) => ({
+    from: candidate.id,
+    to: peer,
+    rpc: {
+      type: 'request-vote-req',
+      term,
+      candidateId: candidate.id,
+      lastLogIndex: lastLogIndex(candidate.log),
+      lastLogTerm: lastLogTerm(candidate.log),
+    },
+  }))
+
+  return { state: candidate, outbox }
+}
+
+/**
  * Figure 2, Candidates → Leaders, plus the leader volatile state
  * reinitialization: nextIndex optimistic at last log index + 1, matchIndex
  * pessimistic at 0.
+ *
+ * The optimism/pessimism split is what makes the consistency check converge:
+ * nextIndex is a guess walked back on rejection, matchIndex is only ever raised
+ * by a confirmed success. A fresh leader knows nothing about what its followers
+ * hold, so matchIndex starts at 0 even for a follower with an identical log.
  *
  * Sends the initial empty AppendEntries immediately ("Upon election: send
  * initial empty AppendEntries RPCs to each server"), which stops every other
@@ -267,7 +388,64 @@ function becomeLeader(state: NodeState): StepResult {
     matchIndex: Object.fromEntries(state.peers.map((peer) => [peer, 0])),
   }
 
-  return { state: leader, outbox: heartbeats(leader) }
+  return { state: leader, outbox: replicate(leader) }
+}
+
+// --- Commit and apply ---
+
+/**
+ * Figure 2, Leaders, final clause:
+ *
+ *   If there exists N > commitIndex such that a majority of matchIndex[i] >= N
+ *   and log[N].term === currentTerm, set commitIndex = N.
+ *
+ * **The current-term test is load-bearing — see the Figure 8 scenario.** An
+ * entry from an earlier term sitting on a majority is *not* safe to commit: a
+ * node that is still eligible to win a later election may hold a conflicting
+ * entry at that index, and committing early lets an acknowledged write be
+ * overwritten. A leader commits inherited entries only indirectly, by
+ * committing one of its own entries, which by Log Matching carries everything
+ * before it along.
+ */
+function advanceCommit(state: NodeState): NodeState {
+  // The leader's own log counts toward the majority; it is trivially
+  // replicated to itself.
+  const replicated = [
+    lastLogIndex(state.log),
+    ...state.peers.map((peer) => state.matchIndex[peer] ?? 0),
+  ].sort((a, b) => b - a)
+
+  // Sorted descending, the element at majority - 1 is the highest index that a
+  // majority of the cluster holds.
+  const n = replicated[majority(state) - 1]
+
+  if (n <= state.commitIndex) return state
+  if (entryAt(state.log, n)?.term !== state.currentTerm) return state
+
+  return { ...state, commitIndex: n }
+}
+
+/**
+ * Figure 2, All Servers: "If commitIndex > lastApplied: increment lastApplied,
+ * apply log[lastApplied] to state machine."
+ *
+ * Applied strictly in index order, so every node applies the same commands in
+ * the same sequence — which is what State Machine Safety asserts.
+ */
+function applyCommitted(state: NodeState): NodeState {
+  if (state.commitIndex <= state.lastApplied) return state
+
+  let kv = state.kv
+  let lastApplied = state.lastApplied
+
+  for (let index = lastApplied + 1; index <= state.commitIndex; index++) {
+    const entry = entryAt(state.log, index)
+    if (entry === undefined) break
+    kv = { ...kv, [entry.command.key]: entry.command.value }
+    lastApplied = index
+  }
+
+  return { ...state, kv, lastApplied }
 }
 
 // --- Helpers ---
@@ -299,29 +477,52 @@ function majority(state: NodeState): number {
   return Math.floor((state.peers.length + 1) / 2) + 1
 }
 
+function nextIndexFor(state: NodeState, peer: NodeId): number {
+  return state.nextIndex[peer] ?? lastLogIndex(state.log) + 1
+}
+
 /**
- * Empty AppendEntries to every peer.
+ * AppendEntries to every peer.
  *
- * `prevLogIndex` is derived per follower from `nextIndex`, which is already the
- * form milestone 3 needs; only `entries` stays empty here.
+ * Figure 2, Leaders: "If last log index >= nextIndex for a follower: send
+ * AppendEntries RPC with log entries starting at nextIndex." When there is
+ * nothing past nextIndex this produces the empty heartbeat, so the same call
+ * serves both purposes.
  */
-function heartbeats(state: NodeState): Message[] {
-  return state.peers.map((peer) => {
-    const prevLogIndex = (state.nextIndex[peer] ?? lastLogIndex(state.log) + 1) - 1
-    return {
-      from: state.id,
-      to: peer,
-      rpc: {
-        type: 'append-entries-req',
-        term: state.currentTerm,
-        leaderId: state.id,
-        prevLogIndex,
-        prevLogTerm: entryAt(state.log, prevLogIndex)?.term ?? 0,
-        entries: [],
-        leaderCommit: state.commitIndex,
-      },
-    }
-  })
+function replicate(state: NodeState): Message[] {
+  return state.peers.map((peer) => appendEntriesTo(state, peer))
+}
+
+function appendEntriesTo(state: NodeState, peer: NodeId): Message {
+  const nextIdx = nextIndexFor(state, peer)
+  const prevLogIndex = nextIdx - 1
+
+  return {
+    from: state.id,
+    to: peer,
+    rpc: {
+      type: 'append-entries-req',
+      term: state.currentTerm,
+      leaderId: state.id,
+      prevLogIndex,
+      prevLogTerm: entryAt(state.log, prevLogIndex)?.term ?? 0,
+      entries: entriesFrom(state.log, nextIdx),
+      leaderCommit: state.commitIndex,
+    },
+  }
+}
+
+function appendReply(
+  state: NodeState,
+  to: NodeId,
+  success: boolean,
+  matchIndex: number,
+): Message {
+  return {
+    from: state.id,
+    to,
+    rpc: { type: 'append-entries-res', term: state.currentTerm, success, matchIndex },
+  }
 }
 
 /**
@@ -346,13 +547,7 @@ function reject(state: NodeState, message: Message): Message[] {
       ]
 
     case 'append-entries-req':
-      return [
-        {
-          from: state.id,
-          to,
-          rpc: { type: 'append-entries-res', term: state.currentTerm, success: false },
-        },
-      ]
+      return [appendReply(state, to, false, 0)]
 
     case 'request-vote-res':
     case 'append-entries-res':

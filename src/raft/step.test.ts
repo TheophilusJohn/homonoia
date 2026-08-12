@@ -16,6 +16,7 @@ function node(overrides: Partial<NodeState> = {}): NodeState {
     log: [],
     commitIndex: 0,
     lastApplied: 0,
+    kv: {},
     electionElapsed: 0,
     electionTimeout: 150,
     heartbeatElapsed: 0,
@@ -55,7 +56,7 @@ function appendReq(term: number, from: NodeId = 'n2'): Message {
 }
 
 function appendRes(term: number, success: boolean, from: NodeId = 'n2'): Message {
-  return { from, to: SELF, rpc: { type: 'append-entries-res', term, success } }
+  return { from, to: SELF, rpc: { type: 'append-entries-res', term, success, matchIndex: 0 } }
 }
 
 function deliver(state: NodeState, message: Message) {
@@ -163,7 +164,7 @@ describe('stale term is rejected', () => {
       {
         from: SELF,
         to: 'n3',
-        rpc: { type: 'append-entries-res', term: 5, success: false },
+        rpc: { type: 'append-entries-res', term: 5, success: false, matchIndex: 0 },
       },
     ])
     expect(state.currentTerm).toBe(5)
@@ -233,9 +234,9 @@ describe('granting a vote', () => {
   }
 
   const log: LogEntry[] = [
-    { term: 1, command: 'a' },
-    { term: 4, command: 'b' },
-    { term: 4, command: 'c' },
+    { term: 1, command: { key: 'a', value: '1' } },
+    { term: 4, command: { key: 'b', value: '2' } },
+    { term: 4, command: { key: 'c', value: '3' } },
   ]
 
   it('grants when the candidate log is identical', () => {

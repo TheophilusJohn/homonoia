@@ -13,8 +13,17 @@ export type NodeId = string
 
 export type Role = 'follower' | 'candidate' | 'leader'
 
-/** An opaque client command, replicated verbatim. */
-export type Command = string
+/**
+ * A client command: set `key` to `value`.
+ *
+ * The replicated state machine is a key-value store, so a command is a single
+ * write. Reads are not commands — they are answered from an applied `kv` and
+ * never enter the log.
+ */
+export interface Command {
+  readonly key: string
+  readonly value: string
+}
 
 export interface LogEntry {
   /** Term of the leader that created this entry. */
@@ -40,6 +49,13 @@ export interface NodeState {
 
   readonly commitIndex: number
   readonly lastApplied: number
+
+  /**
+   * The replicated state machine: every command in `log[1..lastApplied]`
+   * applied in order. Derived state, never a source of truth — a node that
+   * truncates its log and reapplies must arrive here again.
+   */
+  readonly kv: Readonly<Record<string, string>>
 
   /**
    * Ticks since this node last heard from a valid leader or granted a vote.
@@ -96,6 +112,20 @@ export interface AppendEntriesResponse {
   readonly type: 'append-entries-res'
   readonly term: number
   readonly success: boolean
+  /**
+   * Highest log index this follower now holds from the request being answered
+   * (`prevLogIndex + entries.length`). Meaningless when `success` is false.
+   *
+   * **This field is not in Figure 2**, whose response carries only term and
+   * success. The paper's leader knows which request a response answers and
+   * derives matchIndex from what it sent. A pure `step` keeps no in-flight RPC
+   * table, and inferring the value from `nextIndex` is unsafe once the network
+   * can reorder and duplicate — a delayed response would advance matchIndex to
+   * the wrong place, and matchIndex is what the commit calculation reads.
+   * Carrying the index explicitly makes the response self-describing. etcd/raft
+   * does the same thing for the same reason.
+   */
+  readonly matchIndex: number
 }
 
 export type Rpc =

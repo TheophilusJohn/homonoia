@@ -32,3 +32,16 @@ export function entryAt(log: readonly LogEntry[], index: number): LogEntry | und
 export function lastLogTerm(log: readonly LogEntry[]): number {
   return entryAt(log, lastLogIndex(log))?.term ?? 0
 }
+
+/** Entries from 1-based `index` to the end. Empty if `index` is past the log. */
+export function entriesFrom(log: readonly LogEntry[], index: number): readonly LogEntry[] {
+  return log.slice(Math.max(index, 1) - 1)
+}
+
+/**
+ * Entries strictly before 1-based `index` — i.e. the log with `index` and
+ * everything after it deleted. `truncateBefore(log, 1)` empties the log.
+ */
+export function truncateBefore(log: readonly LogEntry[], index: number): readonly LogEntry[] {
+  return log.slice(0, Math.max(index, 1) - 1)
+}
