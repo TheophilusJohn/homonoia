@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react'
 
 import type { NodeId } from '../raft/types'
-import { nodeAtPoint, render } from './field/render'
+import { createCanvasField } from './field/canvasField'
+import { fieldKindFromLocation } from './field/renderer'
+import type { FieldKind, FieldRenderer } from './field/renderer'
 import type { ViewState } from './viewModel'
 
 /**
@@ -25,8 +27,15 @@ interface Props {
   readonly onDrag?: (from: Point, to: Point, width: number, height: number) => void
 }
 
+/**
+ * Which field renderer to use. Read once per page load: switching mid-run would
+ * mean tearing down a GL context on a live frame for no benefit.
+ */
+const FIELD_KIND: FieldKind = fieldKindFromLocation(window.location.search)
+
 export function NodeField({ state, reducedMotion, onNodeClick, onDrag }: Props) {
   const dragFrom = useRef<Point | null>(null)
+  const fieldRef = useRef<FieldRenderer | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const stateRef = useRef(state)
   const motionRef = useRef(reducedMotion)
@@ -39,39 +48,65 @@ export function NodeField({ state, reducedMotion, onNodeClick, onDrag }: Props) 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
 
+    let field: FieldRenderer | null = null
+    let disposed = false
     let frame = 0
-    let width = 0
-    let height = 0
 
     const resize = () => {
       const parent = canvas.parentElement
       if (!parent) return
       const rect = parent.getBoundingClientRect()
       // DPR capped at 2 — beyond that costs fill rate for nothing visible.
-      const dpr = Math.min(window.devicePixelRatio || 1, 2)
-      width = rect.width
-      height = rect.height
-      canvas.width = Math.round(width * dpr)
-      canvas.height = Math.round(height * dpr)
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      field?.resize(rect.width, rect.height, Math.min(window.devicePixelRatio || 1, 2))
     }
 
-    resize()
     const observer = new ResizeObserver(resize)
     if (canvas.parentElement) observer.observe(canvas.parentElement)
 
+    const adopt = (next: FieldRenderer) => {
+      if (disposed) {
+        next.dispose()
+        return
+      }
+      field = next
+      fieldRef.current = next
+      resize()
+    }
+
+    /**
+     * A canvas element is bound to the first context type it is asked for, for
+     * life. Taking a 2d context to draw something while three.js loads would
+     * permanently deny the same element a WebGL one — so when the flag is set
+     * nothing is created until the module resolves, and the canvas renderer is
+     * built only if it does not.
+     *
+     * three.js is ~550kB and only the opt-in field needs it, so the default
+     * path never downloads it.
+     */
+    if (FIELD_KIND === 'webgl') {
+      void import('./field/webglField')
+        .then(({ createWebglField }) => adopt(createWebglField(canvas)))
+        .catch((error: unknown) => {
+          console.warn('WebGL field unavailable, falling back to canvas', error)
+          adopt(createCanvasField(canvas))
+        })
+    } else {
+      adopt(createCanvasField(canvas))
+    }
+
     const loop = () => {
-      render(ctx, stateRef.current, { width, height, reducedMotion: motionRef.current })
+      field?.draw(stateRef.current, { reducedMotion: motionRef.current })
       frame = requestAnimationFrame(loop)
     }
     frame = requestAnimationFrame(loop)
 
     return () => {
+      disposed = true
       cancelAnimationFrame(frame)
       observer.disconnect()
+      field?.dispose()
+      fieldRef.current = null
     }
   }, [])
 
@@ -97,8 +132,8 @@ export function NodeField({ state, reducedMotion, onNodeClick, onDrag }: Props) 
   }
 
   const handleClick = (event: React.MouseEvent<HTMLCanvasElement>) => {
-    const { point, rect } = local(event)
-    const id = nodeAtPoint(stateRef.current, point.x, point.y, rect.width, rect.height)
+    const { point } = local(event)
+    const id = fieldRef.current?.pick(stateRef.current, point.x, point.y)
     if (id) onNodeClick(id)
   }
 

@@ -1,6 +1,6 @@
 import type { NodeId } from '../../raft/types'
 import type { MessageKind, NodeView, ViewState } from '../viewModel'
-import { arcControl, arcCrossing, arcPoint, jitter, NODE_RADIUS, riftBetween, ringLayout } from './geometry'
+import { arcControl, arcPoint, dropProgress, jitter, NODE_RADIUS, riftBetween, ringLayout } from './geometry'
 import type { Point, Rift } from './geometry'
 
 /**
@@ -208,17 +208,7 @@ function drawDrops(
     const from = at(drop.from)
     const to = at(drop.to)
 
-    // Where it died. A message stopped by a partition dies *on the rift* — the
-    // boundary is what killed it, so that is where it comes apart. Anything
-    // else dies in the wire, or on arrival at a node that is not listening.
-    const where =
-      drop.cause === 'partition' && rift
-        ? (arcCrossing(from, to, centre, rift) ?? 0.5)
-        : drop.cause === 'node-down'
-          ? 1
-          : 0.42
-
-    const origin = arcPoint(from, to, centre, where)
+    const origin = arcPoint(from, to, centre, dropProgress(drop.cause, from, to, centre, rift))
 
     for (let k = 0; k < 6; k++) {
       const seed = drop.key.length * 31 + k

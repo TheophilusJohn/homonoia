@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest'
 
-import { arcCrossing, arcPoint, NODE_RADIUS, riftBetween, ringLayout, sideOf } from './field/geometry'
+import {
+  arcCrossing,
+  arcPoint,
+  dropProgress,
+  NODE_RADIUS,
+  riftBetween,
+  ringLayout,
+  sideOf,
+} from './field/geometry'
+import { solidity } from './field/webglField'
 import { castFor } from './demo'
 import { nodeAtPoint } from './field/render'
 import { createMockFeed, MOCK_CYCLE_TICKS } from './mockFeed'
 import { createSimFeed } from './simFeed'
-import type { ViewState } from './viewModel'
+import type { LogCellView, NodeView, ViewState } from './viewModel'
 
 const IDS = ['n1', 'n2', 'n3', 'n4', 'n5']
 
@@ -277,5 +286,89 @@ describe('demo cast', () => {
       const gap = Math.abs(IDS.indexOf(cast.minority[0]) - IDS.indexOf(cast.minority[1]))
       expect(gap === 1 || gap === IDS.length - 1).toBe(true)
     }
+  })
+})
+
+describe('drop placement is shared by both renderers', () => {
+  const layout = ringLayout(IDS, 900, 700)
+  const centre = { x: 450, y: 350 }
+  const rift = riftBetween([['n1', 'n2'], ['n3', 'n4', 'n5']], layout)!
+  const from = layout.get('n1')!
+  const to = layout.get('n4')!
+
+  // The 2D and WebGL fields call this same function, so they cannot disagree
+  // about where a message comes apart.
+  it('kills a partitioned message exactly on the rift', () => {
+    const t = dropProgress('partition', from, to, centre, rift)
+
+    expect(sideOf(rift, arcPoint(from, to, centre, t))).toBeCloseTo(0, 6)
+  })
+
+  it('kills a node-down message at the destination', () => {
+    expect(dropProgress('node-down', from, to, centre, rift)).toBe(1)
+    expect(arcPoint(from, to, centre, dropProgress('node-down', from, to, centre, null))).toEqual(to)
+  })
+
+  it('kills a randomly dropped message in the wire, between the two ends', () => {
+    const t = dropProgress('random', from, to, centre, rift)
+
+    expect(t).toBeGreaterThan(0)
+    expect(t).toBeLessThan(1)
+  })
+
+  it('falls back to mid-arc if a partitioned message somehow never crosses', () => {
+    // Both endpoints on the same side: no crossing exists.
+    expect(dropProgress('partition', layout.get('n3')!, layout.get('n4')!, centre, rift)).toBe(0.5)
+  })
+})
+
+describe('node crystallization in 3D', () => {
+  function node(log: { state: string; committedAt?: number }[]): NodeView {
+    return {
+      id: 'n1',
+      role: 'follower',
+      term: 1,
+      alive: true,
+      commitIndex: log.length,
+      log: log.map((cell, i) => ({
+        index: i + 1,
+        term: 1,
+        label: '1',
+        state: cell.state as LogCellView['state'],
+        committedAt: cell.committedAt,
+      })),
+    }
+  }
+
+  it('is glass while any entry is uncommitted', () => {
+    expect(solidity(node([{ state: 'committed', committedAt: 5 }, { state: 'uncommitted' }]), 100, 0)).toBe(0)
+  })
+
+  it('is glass while an entry is divergent and about to be truncated', () => {
+    expect(solidity(node([{ state: 'divergent' }]), 100, 0)).toBe(0)
+  })
+
+  it('crystallizes to solid over the ledger duration once everything commits', () => {
+    const settled = node([{ state: 'committed', committedAt: 100 }])
+
+    expect(solidity(settled, 100, 0)).toBe(0)
+    expect(solidity(settled, 105.5, 0)).toBeGreaterThan(0.3)
+    expect(solidity(settled, 105.5, 0)).toBeLessThan(0.7)
+    expect(solidity(settled, 120, 0)).toBe(1)
+  })
+
+  // The same wave the ledger runs, so the field and the panel crystallize together.
+  it('staggers down the cluster, later rows lagging earlier ones', () => {
+    const settled = node([{ state: 'committed', committedAt: 100 }])
+    const rows = [0, 1, 2, 3, 4].map((row) => solidity(settled, 104, row))
+
+    for (let i = 1; i < rows.length; i++) expect(rows[i]).toBeLessThanOrEqual(rows[i - 1])
+  })
+
+  it('is derived from time, so scrubbing backwards rewinds it', () => {
+    const settled = node([{ state: 'committed', committedAt: 100 }])
+
+    expect(solidity(settled, 103, 0)).toBe(solidity(settled, 103, 0))
+    expect(solidity(settled, 103, 0)).toBeLessThan(solidity(settled, 108, 0))
   })
 })

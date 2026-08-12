@@ -147,3 +147,23 @@ export function arcCrossing(from: Point, to: Point, centre: Point, rift: Rift): 
   const inside = roots.filter((t) => t >= 0 && t <= 1).sort((x, y) => x - y)
   return inside.length > 0 ? inside[0] : null
 }
+
+/**
+ * Where along its arc a dropped message comes apart, as a bezier parameter.
+ *
+ * Shared by both field renderers so they cannot disagree. A partition drop dies
+ * exactly on the rift — the boundary is what killed it — a node-down drop dies
+ * at the destination, having arrived to find nobody listening, and a random
+ * drop dies in the wire.
+ */
+export function dropProgress(
+  cause: 'random' | 'partition' | 'node-down',
+  from: Point,
+  to: Point,
+  centre: Point,
+  rift: Rift | null,
+): number {
+  if (cause === 'partition' && rift) return arcCrossing(from, to, centre, rift) ?? 0.5
+  if (cause === 'node-down') return 1
+  return 0.42
+}
