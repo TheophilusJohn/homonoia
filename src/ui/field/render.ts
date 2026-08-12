@@ -259,14 +259,26 @@ function drawPulses(
         : pulse.kind === 'receive'
           ? { life: 5, rgb: RGB.ink, from: NODE_RADIUS * 0.6, grow: 1.6, alpha: 0.3, width: 0.8 }
           : pulse.kind === 'elected'
-            ? { life: 26, rgb: RGB.leader, from: NODE_RADIUS, grow: 5.5, alpha: 0.75, width: 1.6 }
-            : { life: 26, rgb: RGB.ink, from: NODE_RADIUS, grow: 5, alpha: 0.6, width: 1.4 }
+            ? // Cinematic, and it earns it: a leader is elected a handful of
+              // times in a run, so this is allowed to be the loudest thing on
+              // the field. 143px.
+              { life: 26, rgb: RGB.leader, from: NODE_RADIUS, grow: 5.5, alpha: 0.75, width: 1.6 }
+            : // Commit: instrument scale, 66px, despite being one of the four
+              // cinematic moments. Under a steady client load the cluster
+              // commits about once a second, and at that cadence a 132px bloom
+              // is not an event, it is texture — it was on screen more often
+              // than the heartbeat and 2.6x its size, drowning the commit
+              // crystallization in the ledger that it exists to point at. The
+              // ledger keeps the cinematic weight; this only acknowledges.
+              { life: 12, rgb: RGB.ink, from: NODE_RADIUS, grow: 2, alpha: 0.3, width: 1.2 }
 
     if (age > spec.life) continue
 
     const t = age / spec.life
-    // Cinematic pulses ease out hard; the heartbeat is close to linear.
-    const eased = pulse.kind === 'heartbeat' || pulse.kind === 'receive' ? t : 1 - (1 - t) ** 3
+    // Only the genuinely rare pulse eases out hard. Everything that repeats —
+    // heartbeat, receive, and now commit — expands linearly and briefly, so it
+    // reads as a readout rather than an announcement.
+    const eased = pulse.kind === 'elected' ? 1 - (1 - t) ** 3 : t
     const p = at(pulse.node)
 
     ctx.strokeStyle = `rgba(${spec.rgb},${spec.alpha * (1 - t)})`

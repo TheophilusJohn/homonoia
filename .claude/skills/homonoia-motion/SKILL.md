@@ -37,6 +37,34 @@ leader elected, commit index advances, partition opens, partition heals.
 If a moment is not on that list of four, it is instrument layer. When unsure,
 it is instrument layer.
 
+### Cadence overrides category
+
+**An effect that can fire more than once every few seconds in normal operation is
+instrument layer, whichever of the four it marks.** The list is a list of *events*.
+An event that recurs on a duty cycle is not an event, it is a state, and dressing
+a state as an event drowns whatever it was meant to announce.
+
+So before giving anything cinematic treatment, ask how often it fires in the
+system's **busiest ordinary state** — not in the demo, not at rest. If the answer
+is "continuously", it is instrument layer no matter what it signifies.
+
+Commit advance is the case that bites, and it bit. Under a steady client load a
+cluster commits about once a second, so the field's commit ring — 132px, cinematic
+ease, 1.3s — was drawn *more often than the heartbeat* and at 2.6× its radius. It
+had become the largest and most constant thing on screen, competing with the
+commit crystallization in the ledger that it existed to point at.
+
+The resolution is the general one: **when a cinematic moment turns out to be
+frequent, keep the cinematic treatment in exactly one place and demote the rest to
+instrument layer.** The ledger's crystallize wave keeps the weight; the field ring
+dropped to 66px, alpha .3, linear, 0.6s — enough to acknowledge a commit, not
+enough to compete. Two effects announcing the same moment is one too many even
+when the moment deserves announcing.
+
+Leader elected stays fully cinematic at 143px: it happens a handful of times in a
+run, so it reads as an event and should feel like one. That is the test — not
+which of the four it is, but how often it fires.
+
 ## Palette
 
 Deep ink, never pure black. Committed state is bone white — ink on paper.
